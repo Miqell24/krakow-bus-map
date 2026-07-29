@@ -15,6 +15,9 @@ written parallel to every street they use, labeled stops, true roundabout arcs.
 - KMK-style rendering: one stroke per roadway, aggregated line numbers rotated
   parallel to streets, shared bus+tram corridors get a single two-color number
   segment, termini labeled with their lines.
+- Poster-style base map (warm tinted districts, green parks, blue water,
+  pale-yellow motorways), narrow Roboto Condensed labels, stops drawn as
+  half-discs oriented to the pole's side of the street, termini as filled discs.
 - Panel with bus/tram visibility filters and a clickable line list (click a line to
   see its route with all stops).
 - Poster-grade PNG export: the current view re-rendered in tiles at ~+3 zoom levels
