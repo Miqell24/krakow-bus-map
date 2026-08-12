@@ -267,7 +267,7 @@ details.journey .beta {
 .jsug div:hover { background: #e6eff9; }
 /* fonts under 16 px make iOS zoom the whole PAGE on input focus */
 @media (pointer: coarse) {
-  .jrow input { font-size: 16px; }
+  #jp .jrow input { font-size: 16px; }
 }
 .jrow input {
   flex: 1 1 auto;
