@@ -1151,16 +1151,7 @@ async function init() {
     const jpOpen = async (open) => {
       jpCard.hidden = !open;
       jpToggle.hidden = open;
-      if (!open) return;
-      await ensureNet();
-      const dl = document.getElementById('stop-list');
-      if (!dl.childElementCount) {
-        for (const name of [...net.groups.keys()].sort((a, b) => a.localeCompare(b, 'pl'))) {
-          const o = document.createElement('option');
-          o.value = name;
-          dl.appendChild(o);
-        }
-      }
+      if (open) await ensureNet();
     };
     jpToggle.addEventListener('click', () => jpOpen(true));
     document.getElementById('jp-close').addEventListener('click', () => jpOpen(false));
@@ -1186,6 +1177,44 @@ async function init() {
         .sort((a, b) => a.d - b.d)
         .slice(0, n);
     };
+
+    // own autocomplete dropdown — iOS Safari never renders <datalist> options
+    // (that's why the datalist approach showed nothing on phones)
+    const wireSuggest = (input, sug, onPick) => {
+      const hide = () => { sug.hidden = true; };
+      const show = () => {
+        if (!net) return;
+        const q = norm(input.value);
+        if (q.length < 2) return hide();
+        const pref = [], sub = [];
+        for (const name of net.groups.keys()) {
+          const nn = norm(name);
+          if (nn.startsWith(q)) { if (pref.length < 8) pref.push(name); }
+          else if (nn.includes(q) && sub.length < 8) sub.push(name);
+        }
+        const list = [...pref, ...sub].slice(0, 8);
+        if (!list.length) return hide();
+        sug.innerHTML = '';
+        for (const name of list) {
+          const d = document.createElement('div');
+          d.textContent = name;
+          // pointerdown fires BEFORE the input's blur, so the tap always lands
+          d.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            input.value = name;
+            hide();
+            if (onPick) onPick();
+          });
+          sug.appendChild(d);
+        }
+        sug.hidden = false;
+      };
+      input.addEventListener('input', show);
+      input.addEventListener('focus', show);
+      input.addEventListener('blur', () => setTimeout(hide, 150));
+    };
+    wireSuggest(fromEl, document.getElementById('j-from-sug'), () => { gpsPos = null; });
+    wireSuggest(toEl, document.getElementById('j-to-sug'));
 
     // best ride on one line between two named groups: the direction where the
     // destination lies AHEAD of the boarding stop

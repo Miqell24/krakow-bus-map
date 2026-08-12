@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kraków Public Transport — interactive map</title>
 <link rel="stylesheet" href="vendor/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=20260812f">
+<link rel="stylesheet" href="style.css?v=20260812g">
 </head>
 <body>
 <div id="map"></div>
@@ -20,11 +20,13 @@
     </div>
     <p class="hint">Network search (no timetables): direct rides and up to two transfers, by ridden distance.</p>
     <div class="jrow">
-      <input id="j-from" list="stop-list" placeholder="From — stop name" autocomplete="off">
+      <input id="j-from" placeholder="From — stop name" autocomplete="off">
       <button id="j-gps" title="Use my GPS position as the start">&#8982;</button>
+      <div class="jsug" id="j-from-sug" hidden></div>
     </div>
     <div class="jrow">
-      <input id="j-to" list="stop-list" placeholder="To — stop name" autocomplete="off">
+      <input id="j-to" placeholder="To — stop name" autocomplete="off">
+      <div class="jsug" id="j-to-sug" hidden></div>
     </div>
     <div class="jrow">
       <button id="j-go" class="jgo">Find route</button>
@@ -34,7 +36,6 @@
     <p id="j-msg" class="hint"></p>
   </div>
 </div>
-<datalist id="stop-list"></datalist>
 <aside id="panel">
   <button id="panel-toggle" aria-label="Hide the panel" title="Hide the panel">&#215;</button>
   <h1>Kraków<br>Public Transport</h1>
@@ -95,6 +96,6 @@
   <label class="debug"><input type="checkbox" id="toggle-shape"> show raw GTFS shapes (QA)</label>
 </aside>
 <script src="vendor/maplibre-gl.js"></script>
-<script src="app.js?v=20260812f"></script>
+<script src="app.js?v=20260812g"></script>
 </body>
 </html>

@@ -248,7 +248,27 @@ details.journey .beta {
   padding: 1px 5px;
   vertical-align: 1px;
 }
-.jrow { display: flex; gap: 6px; margin-top: 7px; }
+.jrow { display: flex; gap: 6px; margin-top: 7px; position: relative; }
+/* own suggestion dropdown: iOS Safari never shows <datalist> options */
+.jsug {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 0;
+  right: 0;
+  z-index: 7;
+  background: #fff;
+  border: 1px solid #ccd6e4;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 30, 70, 0.22);
+  max-height: 190px;
+  overflow: auto;
+}
+.jsug div { padding: 7px 10px; cursor: pointer; }
+.jsug div:hover { background: #e6eff9; }
+/* fonts under 16 px make iOS zoom the whole PAGE on input focus */
+@media (pointer: coarse) {
+  .jrow input { font-size: 16px; }
+}
 .jrow input {
   flex: 1 1 auto;
   min-width: 0;
