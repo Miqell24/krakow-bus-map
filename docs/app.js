@@ -773,7 +773,8 @@ async function init() {
   const btnView = document.getElementById('export-png');
   const btnArea = document.getElementById('export-area');
   const btnAll = document.getElementById('export-all');
-  const exportBusy = (on) => [btnView, btnArea, btnAll].forEach((b) => { b.disabled = on; });
+  const btnAtlas = document.getElementById('export-atlas');
+  const exportBusy = (on) => [btnView, btnArea, btnAll, btnAtlas].forEach((b) => { b.disabled = on; });
   // Area-poster styling: every label (street/stop names, numbers, badges),
   // the stop discs and the transit strokes grow by f while the base street
   // grid keeps its scale — the KMK look, where the typography dominates the
@@ -816,7 +817,7 @@ async function init() {
     return st;
   };
   async function exportBBox(bbox, btn, doneLabel, opts) {
-    exportBusy(true);
+    if (!(opts && opts.noBusy)) exportBusy(true);
     const setLbl = (t) => { btn.textContent = t; };
     const PAD = 200;          // CSS px of tile overlap
     const MAX_OUT = window.__exportMaxOut || 16384; // px of the long edge (2D canvas limit)
@@ -831,7 +832,11 @@ async function init() {
     // the zoom at which the long edge lands exactly on MAX_OUT css px
     const zFit = Math.log2(MAX_OUT / (512 * Math.max(fx, fy)));
     let Z;
-    if (opts && opts.wysiwyg) {
+    if (opts && opts.forceZ) {
+      // atlas sheets: every sheet must share ONE zoom/density pair, or the
+      // sheets would not line up when joined — the caller computes it once
+      Z = opts.forceZ;
+    } else if (opts && opts.wysiwyg) {
       // WYSIWYG mode (current view): render at the SCREEN's own zoom — the
       // sheet shows exactly what the user sees, same framing, same
       // stroke-to-label proportions — and the whole budget goes into pixel
@@ -846,7 +851,7 @@ async function init() {
       // leftover budget becomes pixel density
       Z = Math.min(zFit, Math.max(15.3, Math.min(map.getZoom(), 17.3)));
     }
-    const RATIO = Math.min(4, Math.max(1, 2 ** (zFit - Z)));
+    const RATIO = (opts && opts.forceRatio) || Math.min(4, Math.max(1, 2 ** (zFit - Z)));
     // big tile = fewer passes, but the tile canvas (contCSS × RATIO device px)
     // must fit the GPU limit — 4096 is the universal floor (this machine's
     // too: measured), so size the tile to keep the request inside it and the
@@ -892,7 +897,7 @@ async function init() {
       let k = 0;
       for (let j = 0; j < rows; j++) {
         for (let i = 0; i < cols; i++) {
-          setLbl(`Rendering ${++k}/${rows * cols}…`);
+          setLbl(`${opts && opts.tag ? opts.tag + ' ' : ''}Rendering ${++k}/${rows * cols}…`);
           const x0 = i * tileCSS, y0 = j * tileCSS;
           const w = Math.min(tileCSS, W - x0), h = Math.min(tileCSS, H - y0);
           m2.jumpTo({ center: px2ll(tlx + x0 + w / 2, tly + y0 + h / 2), zoom: Z });
@@ -904,22 +909,26 @@ async function init() {
         }
       }
       setLbl('Saving…');
-      // attribution baked into the image (the DOM bar is not part of the canvas)
-      const fs = Math.max(16, Math.round(out.width / 130));
-      ctx.font = `${fs}px sans-serif`;
-      ctx.textBaseline = 'bottom';
-      const txt = '© OpenStreetMap contributors · OpenFreeMap · GTFS: ZTP Kraków';
-      const tw = ctx.measureText(txt).width;
-      ctx.fillStyle = 'rgba(255,255,255,0.82)';
-      ctx.fillRect(out.width - tw - fs, out.height - fs * 1.7, tw + fs, fs * 1.7);
-      ctx.fillStyle = '#333333';
-      ctx.fillText(txt, out.width - tw - fs / 2, out.height - fs * 0.4);
+      // attribution baked into the image (the DOM bar is not part of the canvas);
+      // atlas sheets skip it except the last one, or a join would repeat it 16×
+      if (!(opts && opts.attrib === false)) {
+        const fs = Math.max(16, Math.round(out.width / 130));
+        ctx.font = `${fs}px sans-serif`;
+        ctx.textBaseline = 'bottom';
+        const txt = '© OpenStreetMap contributors · OpenFreeMap · GTFS: ZTP Kraków';
+        const tw = ctx.measureText(txt).width;
+        ctx.fillStyle = 'rgba(255,255,255,0.82)';
+        ctx.fillRect(out.width - tw - fs, out.height - fs * 1.7, tw + fs, fs * 1.7);
+        ctx.fillStyle = '#333333';
+        ctx.fillText(txt, out.width - tw - fs / 2, out.height - fs * 0.4);
+      }
       const blob = await new Promise((res) => out.toBlob(res, 'image/png'));
       if (!blob) throw new Error('toBlob returned null (out of memory?)');
       const d = new Date();
       const pad = (n) => String(n).padStart(2, '0');
       const a = document.createElement('a');
-      a.download = `krakow-transit_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}_${out.width}x${out.height}.png`;
+      a.download = (opts && opts.filename)
+        || `krakow-transit_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}_${out.width}x${out.height}.png`;
       a.href = URL.createObjectURL(blob);
       if (!window.__exportNoSave) a.click(); // test hook: render without downloading
       setTimeout(() => URL.revokeObjectURL(a.href), 30000);
@@ -944,7 +953,7 @@ async function init() {
     }
     if (m2) try { m2.remove(); } catch (e) { /* the canvas may be gone already */ }
     div.remove();
-    exportBusy(false);
+    if (!(opts && opts.noBusy)) exportBusy(false);
     setLbl(doneLabel);
   }
 
@@ -1019,6 +1028,66 @@ async function init() {
     // stay just under the complex-separation margin (band edge z13.0 vs the
     // poster's ~z13.35+ render — spacing factor 2^0.35 ≈ 1.27).
     exportBBox([w - dx, s - dy, e + dx, n + dy], btnAll, 'Export PNG — whole map', { boost: 1.25 });
+  });
+  // ATLAS: the whole network at ~65 000 px on the long edge. One PNG that big
+  // cannot exist in a browser (canvas area caps out around 16k×16k), so the
+  // map is cut into a GRID of sheets sharing ONE zoom/density pair — pixels
+  // line up exactly at the seams and the sheets join into the full image with
+  // a single ImageMagick command. Sheets download one after another.
+  btnAtlas.addEventListener('click', async () => {
+    if (btnAtlas.disabled) return;
+    const TOTAL = window.__atlasTotal || 65000;
+    const GRID = window.__atlasGrid || 4;
+    const [w, s, e, n] = meta.bbox;
+    const dx = (e - w) * 0.015, dy = (n - s) * 0.015;
+    const bbox = [w - dx, s - dy, e + dx, n + dy];
+    const mxf = (lng) => (lng + 180) / 360;
+    const myf = (lat) => {
+      const si = Math.sin((lat * Math.PI) / 180);
+      return 0.5 - Math.log((1 + si) / (1 - si)) / (4 * Math.PI);
+    };
+    const lngAt = (f) => f * 360 - 180;
+    const latAt = (f) => {
+      const p = Math.PI - 2 * Math.PI * f;
+      return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(p) - Math.exp(-p)));
+    };
+    const fx = mxf(bbox[2]) - mxf(bbox[0]), fy = myf(bbox[1]) - myf(bbox[3]);
+    // the shared scale: the zoom that lands the FULL long edge on TOTAL px
+    // (in practice ~z15.8 vs the single sheet's ~z13.9 — that head-room is
+    // exactly where the extra line numbers and stop names come from)
+    const zFitT = Math.log2(TOTAL / (512 * Math.max(fx, fy)));
+    const Z = Math.min(zFitT, 16);
+    const RATIO = Math.min(4, Math.max(1, 2 ** (zFitT - Z)));
+    const x0 = mxf(bbox[0]), y0 = myf(bbox[3]);
+    const d0 = new Date();
+    const p2 = (v) => String(v).padStart(2, '0');
+    const stamp = `${d0.getFullYear()}-${p2(d0.getMonth() + 1)}-${p2(d0.getDate())}`;
+    exportBusy(true);
+    try {
+      for (let r = 0; r < GRID; r++) {
+        for (let c = 0; c < GRID; c++) {
+          const sb = [
+            lngAt(x0 + (fx * c) / GRID), latAt(y0 + (fy * (r + 1)) / GRID),
+            lngAt(x0 + (fx * (c + 1)) / GRID), latAt(y0 + (fy * r) / GRID),
+          ];
+          await exportBBox(sb, btnAtlas, 'Export PNG — atlas 65k (16 sheets)', {
+            boost: 1.25, forceZ: Z, forceRatio: RATIO, noBusy: true,
+            tag: `Sheet ${r * GRID + c + 1}/${GRID * GRID} ·`,
+            filename: `krakow-atlas_${stamp}_r${r + 1}c${c + 1}.png`,
+            attrib: r === GRID - 1 && c === GRID - 1,
+          });
+        }
+      }
+      if (!window.__exportNoSave) {
+        alert(`Atlas done: ${GRID * GRID} sheets in your downloads (krakow-atlas_${stamp}_r1c1…r${GRID}c${GRID}).\n\n`
+          + 'Join them into one PNG with ImageMagick (brew install imagemagick):\n\n'
+          + `magick montage krakow-atlas_${stamp}_r*c*.png -tile ${GRID}x${GRID} -geometry +0+0 krakow-${Math.round(TOTAL / 1000)}k.png\n\n`
+          + 'The joined file is ~65 000 px wide (1–2 GB); the sheets also print fine on their own.');
+      }
+    } finally {
+      exportBusy(false);
+      btnAtlas.textContent = 'Export PNG — atlas 65k (16 sheets)';
+    }
   });
 
   // Raw GTFS trace — for matching QA; lazy-loaded on first toggle
