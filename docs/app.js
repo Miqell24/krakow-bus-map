@@ -1144,9 +1144,14 @@ async function init() {
       return netBuilding;
     };
 
-    // fill the autocomplete on first interest in the planner
-    document.querySelector('details.journey').addEventListener('toggle', async (e) => {
-      if (!e.target.open) return;
+    // floating widget top-centre of the map: a pill that expands into the card
+    // (on phones the planner buried in the legend was unusable — user report);
+    // the network model and the autocomplete load on first open
+    const jpCard = document.getElementById('jp-card'), jpToggle = document.getElementById('jp-toggle');
+    const jpOpen = async (open) => {
+      jpCard.hidden = !open;
+      jpToggle.hidden = open;
+      if (!open) return;
       await ensureNet();
       const dl = document.getElementById('stop-list');
       if (!dl.childElementCount) {
@@ -1156,7 +1161,9 @@ async function init() {
           dl.appendChild(o);
         }
       }
-    });
+    };
+    jpToggle.addEventListener('click', () => jpOpen(true));
+    document.getElementById('jp-close').addEventListener('click', () => jpOpen(false));
 
     const norm = (s) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
     const resolveName = (q) => {
@@ -1388,7 +1395,14 @@ async function init() {
       map.getSource('journey').setData({ type: 'FeatureCollection', features: feats });
       state.journey = { lines: [...new Set([...opt.legs.map((l) => l.line), ...(opt.alt1 || [])])] };
       applyFilters();
-      map.fitBounds([[west, south], [east, north]], { padding: { top: 70, bottom: 40, left: 340, right: 60 }, maxZoom: 14.5 });
+      const phone = window.matchMedia('(max-width: 560px)').matches;
+      const panelOpen = !document.getElementById('panel').classList.contains('collapsed');
+      map.fitBounds([[west, south], [east, north]], {
+        padding: phone ? { top: 66, bottom: 30, left: 24, right: 24 }
+          : { top: 90, bottom: 40, left: panelOpen ? 340 : 60, right: 60 },
+        maxZoom: 14.5,
+      });
+      if (phone) jpOpen(false); // the expanded card was covering the shown route
     };
 
     const clearJourney = () => {
