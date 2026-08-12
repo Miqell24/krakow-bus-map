@@ -772,8 +772,8 @@ async function init() {
   // state: bus/tram filters, selected line, QA overlay.
   const btnView = document.getElementById('export-png');
   const btnArea = document.getElementById('export-area');
-  const btnAll = document.getElementById('export-all');
-  const exportBusy = (on) => [btnView, btnArea, btnAll].forEach((b) => { b.disabled = on; });
+  const btnAtlas = document.getElementById('export-atlas');
+  const exportBusy = (on) => [btnView, btnArea, btnAtlas].forEach((b) => { b.disabled = on; });
   // Area-poster styling: every label (street/stop names, numbers, badges),
   // the stop discs and the transit strokes grow by f while the base street
   // grid keeps its scale — the KMK look, where the typography dominates the
@@ -816,7 +816,7 @@ async function init() {
     return st;
   };
   async function exportBBox(bbox, btn, doneLabel, opts) {
-    exportBusy(true);
+    if (!(opts && opts.noBusy)) exportBusy(true);
     const setLbl = (t) => { btn.textContent = t; };
     const PAD = 200;          // CSS px of tile overlap
     const MAX_OUT = window.__exportMaxOut || 16384; // px of the long edge (2D canvas limit)
@@ -831,7 +831,11 @@ async function init() {
     // the zoom at which the long edge lands exactly on MAX_OUT css px
     const zFit = Math.log2(MAX_OUT / (512 * Math.max(fx, fy)));
     let Z;
-    if (opts && opts.wysiwyg) {
+    if (opts && opts.forceZ) {
+      // atlas sheets: every sheet must share ONE zoom/density pair, or the
+      // sheets would not line up when joined — the caller computes it once
+      Z = opts.forceZ;
+    } else if (opts && opts.wysiwyg) {
       // WYSIWYG mode (current view): render at the SCREEN's own zoom — the
       // sheet shows exactly what the user sees, same framing, same
       // stroke-to-label proportions — and the whole budget goes into pixel
@@ -846,7 +850,7 @@ async function init() {
       // leftover budget becomes pixel density
       Z = Math.min(zFit, Math.max(15.3, Math.min(map.getZoom(), 17.3)));
     }
-    const RATIO = Math.min(4, Math.max(1, 2 ** (zFit - Z)));
+    const RATIO = (opts && opts.forceRatio) || Math.min(4, Math.max(1, 2 ** (zFit - Z)));
     // big tile = fewer passes, but the tile canvas (contCSS × RATIO device px)
     // must fit the GPU limit — 4096 is the universal floor (this machine's
     // too: measured), so size the tile to keep the request inside it and the
@@ -892,7 +896,7 @@ async function init() {
       let k = 0;
       for (let j = 0; j < rows; j++) {
         for (let i = 0; i < cols; i++) {
-          setLbl(`Rendering ${++k}/${rows * cols}…`);
+          setLbl(`${opts && opts.tag ? opts.tag + ' ' : ''}Rendering ${++k}/${rows * cols}…`);
           const x0 = i * tileCSS, y0 = j * tileCSS;
           const w = Math.min(tileCSS, W - x0), h = Math.min(tileCSS, H - y0);
           m2.jumpTo({ center: px2ll(tlx + x0 + w / 2, tly + y0 + h / 2), zoom: Z });
@@ -904,22 +908,26 @@ async function init() {
         }
       }
       setLbl('Saving…');
-      // attribution baked into the image (the DOM bar is not part of the canvas)
-      const fs = Math.max(16, Math.round(out.width / 130));
-      ctx.font = `${fs}px sans-serif`;
-      ctx.textBaseline = 'bottom';
-      const txt = '© OpenStreetMap contributors · OpenFreeMap · GTFS: ZTP Kraków';
-      const tw = ctx.measureText(txt).width;
-      ctx.fillStyle = 'rgba(255,255,255,0.82)';
-      ctx.fillRect(out.width - tw - fs, out.height - fs * 1.7, tw + fs, fs * 1.7);
-      ctx.fillStyle = '#333333';
-      ctx.fillText(txt, out.width - tw - fs / 2, out.height - fs * 0.4);
+      // attribution baked into the image (the DOM bar is not part of the canvas);
+      // atlas sheets skip it except the last one, or a join would repeat it 16×
+      if (!(opts && opts.attrib === false)) {
+        const fs = Math.max(16, Math.round(out.width / 130));
+        ctx.font = `${fs}px sans-serif`;
+        ctx.textBaseline = 'bottom';
+        const txt = '© OpenStreetMap contributors · OpenFreeMap · GTFS: ZTP Kraków';
+        const tw = ctx.measureText(txt).width;
+        ctx.fillStyle = 'rgba(255,255,255,0.82)';
+        ctx.fillRect(out.width - tw - fs, out.height - fs * 1.7, tw + fs, fs * 1.7);
+        ctx.fillStyle = '#333333';
+        ctx.fillText(txt, out.width - tw - fs / 2, out.height - fs * 0.4);
+      }
       const blob = await new Promise((res) => out.toBlob(res, 'image/png'));
       if (!blob) throw new Error('toBlob returned null (out of memory?)');
       const d = new Date();
       const pad = (n) => String(n).padStart(2, '0');
       const a = document.createElement('a');
-      a.download = `krakow-transit_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}_${out.width}x${out.height}.png`;
+      a.download = (opts && opts.filename)
+        || `krakow-transit_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}_${out.width}x${out.height}.png`;
       a.href = URL.createObjectURL(blob);
       if (!window.__exportNoSave) a.click(); // test hook: render without downloading
       setTimeout(() => URL.revokeObjectURL(a.href), 30000);
@@ -944,7 +952,7 @@ async function init() {
     }
     if (m2) try { m2.remove(); } catch (e) { /* the canvas may be gone already */ }
     div.remove();
-    exportBusy(false);
+    if (!(opts && opts.noBusy)) exportBusy(false);
     setLbl(doneLabel);
   }
 
@@ -1010,15 +1018,193 @@ async function init() {
     const bbox = await selectArea();
     if (bbox) exportBBox(bbox, btnArea, 'Export PNG — select area', { boost: 1.4 });
   });
-  btnAll.addEventListener('click', () => {
-    if (btnAll.disabled) return;
-    // the data bbox plus a hair of margin, so badge grids at the edge survive
-    const [w, s, e, n] = meta.bbox;
-    const dx = (e - w) * 0.015, dy = (n - s) * 0.015;
-    // boost 1.25: labels grow for legibility when zooming INTO the PNG, and
-    // stay just under the complex-separation margin (band edge z13.0 vs the
-    // poster's ~z13.35+ render — spacing factor 2^0.35 ≈ 1.27).
-    exportBBox([w - dx, s - dy, e + dx, n + dy], btnAll, 'Export PNG — whole map', { boost: 1.25 });
+  // GIANT export: the whole network at ~65 000 px on the long edge in ONE
+  // PNG, assembled IN the browser before the download (user rule: no
+  // stitching on the computer). No canvas can hold 65k×48k (area caps out
+  // around 16k×16k), so the tiles are streamed straight into a PNG encoder:
+  // pixel rows are assembled band by band from the rendered tiles and
+  // deflated on the fly — CompressionStream('deflate') emits exactly the
+  // zlib stream IDAT wants. Raw pixels never exist in one piece; only the
+  // compressed file does.
+  btnAtlas.addEventListener('click', async () => {
+    if (btnAtlas.disabled) return;
+    const IDLE_LABEL = btnAtlas.textContent;
+    const setLbl = (t) => { btnAtlas.textContent = t; };
+    if (typeof CompressionStream === 'undefined') {
+      setLbl('No CompressionStream in this browser');
+      setTimeout(() => setLbl(IDLE_LABEL), 3000);
+      return;
+    }
+    const TOTAL = window.__atlasTotal || 65000;
+    const [w0, s0, e0, n0] = meta.bbox;
+    const ddx = (e0 - w0) * 0.015, ddy = (n0 - s0) * 0.015;
+    const bbox = [w0 - ddx, s0 - ddy, e0 + ddx, n0 + ddy];
+    const mxf = (lng) => (lng + 180) / 360;
+    const myf = (lat) => {
+      const si = Math.sin((lat * Math.PI) / 180);
+      return 0.5 - Math.log((1 + si) / (1 - si)) / (4 * Math.PI);
+    };
+    const fx = mxf(bbox[2]) - mxf(bbox[0]), fy = myf(bbox[1]) - myf(bbox[3]);
+    // the zoom that lands the FULL long edge on TOTAL px (~z15.8 vs the
+    // single sheet's ~z13.9) — that head-room is exactly where the extra
+    // line numbers and stop names come from
+    const zFitT = Math.log2(TOTAL / (512 * Math.max(fx, fy)));
+    const Z = Math.min(zFitT, 16);
+    const RATIO = Math.min(4, Math.max(1, 2 ** (zFitT - Z)));
+    const PAD = 200;
+    const contCSS = Math.max(1024, Math.floor(4096 / RATIO));
+    const tileCSS = contCSS - 2 * PAD;
+    const world = 512 * 2 ** Z;
+    const W = Math.round(fx * world), H = Math.round(fy * world);
+    const cols = Math.ceil(W / tileCSS), rows = Math.ceil(H / tileCSS);
+    const tlx = mxf(bbox[0]) * world, tly = myf(bbox[3]) * world;
+    const px2ll = (x, y) => {
+      const p = Math.PI - (2 * Math.PI * y) / world;
+      return [(x / world) * 360 - 180, (180 / Math.PI) * Math.atan(0.5 * (Math.exp(p) - Math.exp(-p)))];
+    };
+    // -- minimal PNG plumbing (RGBA8, filter 0 per row) --
+    const CRC_T = new Uint32Array(256);
+    for (let n2 = 0; n2 < 256; n2++) {
+      let c = n2;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      CRC_T[n2] = c >>> 0;
+    }
+    const crcUpd = (c, buf) => {
+      for (let i = 0; i < buf.length; i++) c = CRC_T[(c ^ buf[i]) & 255] ^ (c >>> 8);
+      return c >>> 0;
+    };
+    const be32 = (v) => new Uint8Array([(v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255]);
+    const parts = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])];
+    const pushChunk = (type, data) => {
+      const t = Uint8Array.from(type, (ch) => ch.charCodeAt(0));
+      const crc = (crcUpd(crcUpd(0xffffffff, t), data) ^ 0xffffffff) >>> 0;
+      parts.push(be32(data.length), t, data, be32(crc));
+    };
+    exportBusy(true);
+    const div = document.createElement('div');
+    div.style.cssText = `position:fixed;left:-100000px;top:0;width:${contCSS}px;height:${contCSS}px;`;
+    document.body.appendChild(div);
+    let m2 = null;
+    try {
+      m2 = new maplibregl.Map({
+        container: div,
+        // 1.4 (not the old sheet's 1.25): at this zoom there is room to spare,
+        // and the user wanted the base type a notch bigger on the print
+        style: boostStyle(map.getStyle(), 1.4),
+        center: px2ll(tlx + W / 2, tly + H / 2), zoom: Z,
+        pixelRatio: RATIO, preserveDrawingBuffer: true, antialias: true,
+        attributionControl: false, interactive: false, fadeDuration: 0,
+      });
+      addStopIcons(m2);
+      const idle = () => new Promise((res, rej) => {
+        const t = setTimeout(() => rej(new Error('tile render timeout')), 45000);
+        m2.once('idle', () => { clearTimeout(t); res(); });
+      });
+      await idle();
+      const SR = m2.getCanvas().width / contCSS;
+      const px = (cssV) => Math.round(cssV * SR);
+      const Wf = px(W), Hf = px(H);
+      const ihdr = new Uint8Array(13);
+      ihdr.set(be32(Wf), 0);
+      ihdr.set(be32(Hf), 4);
+      ihdr.set([8, 6, 0, 0, 0], 8); // 8-bit, RGBA, deflate, filter 0, no interlace
+      pushChunk('IHDR', ihdr);
+      let idatBuf = [], idatLen = 0;
+      const flushIdat = () => {
+        if (!idatLen) return;
+        const all = new Uint8Array(idatLen);
+        let o = 0;
+        for (const b of idatBuf) { all.set(b, o); o += b.length; }
+        pushChunk('IDAT', all);
+        idatBuf = []; idatLen = 0;
+      };
+      const idatPush = (u8) => {
+        idatBuf.push(u8); idatLen += u8.length;
+        if (idatLen >= 1 << 23) flushIdat(); // 8 MB per IDAT chunk
+      };
+      const cs = new CompressionStream('deflate');
+      const wtr = cs.writable.getWriter();
+      const pump = (async () => {
+        const rdr = cs.readable.getReader();
+        for (;;) {
+          const { done, value } = await rdr.read();
+          if (done) break;
+          idatPush(value);
+        }
+      })();
+      // double-buffered row so a buffer is never mutated while the
+      // compressor might still hold it
+      const rowBufs = [new Uint8Array(1 + Wf * 4), new Uint8Array(1 + Wf * 4)];
+      let done = 0;
+      for (let j = 0; j < rows; j++) {
+        const y0 = j * tileCSS, hcss = Math.min(tileCSS, H - y0);
+        const hpx = px(y0 + hcss) - px(y0);
+        const band = [];
+        for (let i = 0; i < cols; i++) {
+          setLbl(`Rendering ${++done}/${rows * cols}…`);
+          const x0 = i * tileCSS, wcss = Math.min(tileCSS, W - x0);
+          m2.jumpTo({ center: px2ll(tlx + x0 + wcss / 2, tly + y0 + hcss / 2), zoom: Z });
+          m2.triggerRepaint();
+          await idle();
+          const xpx0 = px(x0), wpx = px(x0 + wcss) - xpx0;
+          const cc = document.createElement('canvas');
+          cc.width = wpx; cc.height = hpx;
+          const cx = cc.getContext('2d', { willReadFrequently: true });
+          cx.drawImage(m2.getCanvas(),
+            ((contCSS - wcss) / 2) * SR, ((contCSS - hcss) / 2) * SR, wcss * SR, hcss * SR,
+            0, 0, wpx, hpx);
+          if (j === rows - 1 && i === cols - 1) {
+            // attribution in the bottom-right corner of the final image
+            const fs = Math.max(16, Math.round(Wf / 500));
+            cx.font = `${fs}px sans-serif`;
+            cx.textBaseline = 'bottom';
+            const txt = '© OpenStreetMap contributors · OpenFreeMap · GTFS: ZTP Kraków';
+            const tw = Math.min(cx.measureText(txt).width, wpx - fs);
+            cx.fillStyle = 'rgba(255,255,255,0.82)';
+            cx.fillRect(wpx - tw - fs, hpx - fs * 1.7, tw + fs, fs * 1.7);
+            cx.fillStyle = '#333333';
+            cx.fillText(txt, wpx - tw - fs / 2, hpx - fs * 0.4);
+          }
+          band.push({ data: cx.getImageData(0, 0, wpx, hpx).data, off: 1 + xpx0 * 4, wb: wpx * 4 });
+        }
+        setLbl(`Encoding band ${j + 1}/${rows}…`);
+        for (let y = 0; y < hpx; y++) {
+          const row = rowBufs[y & 1];
+          row[0] = 0; // filter: None
+          for (const t of band) row.set(t.data.subarray(y * t.wb, (y + 1) * t.wb), t.off);
+          await wtr.write(row);
+        }
+      }
+      await wtr.close();
+      await pump;
+      flushIdat();
+      pushChunk('IEND', new Uint8Array(0));
+      setLbl('Saving…');
+      const blob = new Blob(parts, { type: 'image/png' });
+      const d = new Date();
+      const p2 = (v) => String(v).padStart(2, '0');
+      const a = document.createElement('a');
+      a.download = `krakow-transit-giant_${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}_${Wf}x${Hf}.png`;
+      a.href = URL.createObjectURL(blob);
+      if (window.__exportNoSave) {
+        window.__lastGiantURL = a.href; // test hook: decode-check without downloading
+      } else {
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      }
+      window.__lastExport = {
+        width: Wf, height: Hf, tiles: rows * cols, sr: Math.round(SR * 100) / 100,
+        bytes: blob.size, z: Math.round(Z * 100) / 100, ratio: Math.round(RATIO * 100) / 100, giant: 1,
+      };
+    } catch (err) {
+      console.error('Giant export failed', err);
+      setLbl('Export failed — see console');
+      await new Promise((res) => setTimeout(res, 2500));
+    }
+    if (m2) try { m2.remove(); } catch (err2) { /* canvas may be gone */ }
+    div.remove();
+    exportBusy(false);
+    setLbl(IDLE_LABEL);
   });
 
   // Raw GTFS trace — for matching QA; lazy-loaded on first toggle
@@ -1065,7 +1251,7 @@ async function init() {
     let net = null, netBuilding = null;
 
     // equirectangular metres around Kraków — good to ~0.1% at city scale
-    const R = 6371000, rad = Math.PI / 180, cosLat = Math.cos(50.06 * rad);
+    const R = 6371000, rad = Math.PI / 180, cosLat = Math.cos(((meta.bbox[1] + meta.bbox[3]) / 2) * rad);
     const mx = (ll) => [ll[0] * rad * R * cosLat, ll[1] * rad * R];
 
     // nearest point of a polyline (metre space): distance, arc position, segment
@@ -1451,7 +1637,7 @@ async function init() {
           const all = li === 0 && o.alt1 ? [l.line, ...o.alt1] : [l.line];
           const label = all.slice(0, 5).join(' / ') + (all.length > 5 ? ' …' : '');
           const tip = all.length > 5 ? ` title="${esc2(all.join(' / '))}"` : '';
-          return `<span class="jl${l.mode === 'tram' ? ' tram' : ''}"${tip}>${esc2(label)}</span> ${esc2(l.from)} &rarr; ${esc2(l.to)}`;
+          return `<span class="jl" style="background:${esc2(l.color)}"${tip}>${esc2(label)}</span> ${esc2(l.from)} &rarr; ${esc2(l.to)}`;
         });
         const km = o.legs.reduce((s, l) => s + l.m, 0) / 1000;
         const tr = o.legs.length - 1;

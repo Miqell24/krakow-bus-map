@@ -5,17 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Kraków Public Transport — interactive map</title>
 <link rel="stylesheet" href="vendor/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=20260812i">
+<link rel="stylesheet" href="style.css?v=20260812k">
 </head>
 <body>
 <div id="map"></div>
 <div id="area-box"></div>
 <div id="area-hint">Drag a rectangle to choose the export area &middot; Esc cancels</div>
 <div id="jp">
-  <button id="jp-toggle">Journey planner <span class="beta">beta</span></button>
+  <button id="jp-toggle">Journey planner</button>
   <div id="jp-card" hidden>
     <div class="jp-head">
-      <span>Journey planner <span class="beta">beta</span></span>
+      <span>Journey planner</span>
       <button id="jp-close" aria-label="Hide the journey planner" title="Hide the journey planner">&#215;</button>
     </div>
     <p class="hint">Network search (no timetables): direct rides and up to two transfers, by ridden distance.</p>
@@ -90,12 +90,12 @@
   <div class="export">
     <button id="export-png" title="Renders the visible view as a large print-quality PNG — street and stop names become legible as you zoom into the image">Export PNG — current view</button>
     <button id="export-area" title="Drag a rectangle on the map; that area is rendered as a large print-quality PNG">Export PNG — select area</button>
-    <button id="export-all" title="Renders the ENTIRE network as one poster-grade PNG, like the printed city transport map (takes a minute or two)">Export PNG — whole map</button>
+    <button id="export-atlas" title="The ENTIRE network as one poster-grade PNG at ~65 000 px on the long edge, streamed together in the browser (takes several minutes, keep the tab open)">Export PNG — whole map</button>
   </div>
   <div id="footer">Data: GTFS ZTP Kraków · <span id="stamp"></span></div>
   <label class="debug"><input type="checkbox" id="toggle-shape"> show raw GTFS shapes (QA)</label>
 </aside>
 <script src="vendor/maplibre-gl.js"></script>
-<script src="app.js?v=20260812i"></script>
+<script src="app.js?v=20260812k"></script>
 </body>
 </html>
