@@ -1431,7 +1431,7 @@ async function init() {
           : { top: 90, bottom: 40, left: panelOpen ? 340 : 60, right: 60 },
         maxZoom: 14.5,
       });
-      if (phone) jpOpen(false); // the expanded card was covering the shown route
+      jpOpen(false); // the expanded card covers the shown route — hide it on pick
     };
 
     const clearJourney = () => {
