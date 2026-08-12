@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kraków Public Transport — interactive map</title>
 <link rel="stylesheet" href="vendor/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=20260812c">
+<link rel="stylesheet" href="style.css?v=20260812e">
 </head>
 <body>
 <div id="map"></div>
@@ -44,6 +44,24 @@
     <p class="hint">Click a line to show its route and stops.</p>
     <div id="chips" class="chip-cloud"></div>
   </details>
+  <details class="journey">
+    <summary>Journey planner <span class="beta">beta</span></summary>
+    <p class="hint">Network search (no timetables): direct rides and up to two transfers, by ridden distance.</p>
+    <div class="jrow">
+      <input id="j-from" list="stop-list" placeholder="From — stop name" autocomplete="off">
+      <button id="j-gps" title="Use my GPS position as the start">&#8982;</button>
+    </div>
+    <div class="jrow">
+      <input id="j-to" list="stop-list" placeholder="To — stop name" autocomplete="off">
+    </div>
+    <div class="jrow">
+      <button id="j-go" class="jgo">Find route</button>
+      <button id="j-clear">Clear</button>
+    </div>
+    <ol id="j-results"></ol>
+    <p id="j-msg" class="hint"></p>
+  </details>
+  <datalist id="stop-list"></datalist>
   <div class="labelsize" title="Scales the transit content — line numbers, stop names and terminus badges — at any zoom. The PNG exports use the sizes you pick here.">
     <span class="lbl">Lines &amp; stops</span>
     <button id="label-smaller" aria-label="Smaller transit labels">A&minus;</button>
@@ -71,6 +89,6 @@
   <label class="debug"><input type="checkbox" id="toggle-shape"> show raw GTFS shapes (QA)</label>
 </aside>
 <script src="vendor/maplibre-gl.js"></script>
-<script src="app.js?v=20260812c"></script>
+<script src="app.js?v=20260812e"></script>
 </body>
 </html>

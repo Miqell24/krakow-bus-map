@@ -643,7 +643,7 @@ async function init() {
 
   // Mode filters (bus/tram) + line selection: clicking a chip shows only that
   // line's route with all of its stops (properties.arr carry the line lists).
-  const state = { bus: true, tram: true, selected: null };
+  const state = { bus: true, tram: true, selected: null, journey: null };
   let densityCond = true; // repeat-thinning condition, set by the Number density row below
   let densityMainCond = true; // sparsest step: one main row per same-content corridor chain
   const busOnlyNumbers = ['case', ['has', 'busLines'],
@@ -653,20 +653,25 @@ async function init() {
   function applyFilters() {
     const modes = [state.bus ? 'bus' : null, state.tram ? 'tram' : null].filter(Boolean);
     const modeC = ['in', ['get', 'mode'], ['literal', modes]];
-    const selC = state.selected ? ['in', state.selected, ['get', 'arr']] : true;
+    // an active journey hides the WHOLE regular network (user request: the
+    // line's return run and the rest of its route were noise) — the ride is
+    // drawn complete by the journey overlay: legs, via stops, numbers
+    const selC = state.journey ? false
+      : state.selected ? ['in', state.selected, ['get', 'arr']] : true;
     map.setFilter('route-casing', ['all', modeC, selC]);
     map.setFilter('route-line', ['all', modeC, selC]);
     map.setFilter('route-trolley-dash', ['all', ['==', ['get', 'trolley'], 'mix'], modeC, selC]);
     map.setFilter('stops-dots', ['all', modeC, selC]);
     // with a line selected, names of ALL its stops (no label clustering)
-    const lblC = state.selected ? true : ['==', ['get', 'label'], 1];
+    const lblC = state.selected || state.journey ? true : ['==', ['get', 'label'], 1];
     map.setFilter('stops-names', ['all', ['!=', ['get', 'terminus'], 1], ['!=', ['get', 'metro'], 1], modeC, selC, lblC]);
     map.setFilter('stops-terminus-names', ['all', ['==', ['get', 'terminus'], 1], ['!=', ['get', 'metro'], 1], modeC, selC, lblC]);
     map.setFilter('stops-metro-names', ['all', ['==', ['get', 'metro'], 1], modeC, selC, lblC]);
     // with a line selected only ITS badge stays at the loop
     BADGE_LAYERS.forEach((id, b) => {
       map.setFilter(id, ['all', bandC(b), ['has', 'line'], modeC,
-        state.selected ? ['==', ['get', 'line'], state.selected] : true]);
+        state.journey ? false
+          : state.selected ? ['==', ['get', 'line'], state.selected] : true]);
     });
     // complex name rows follow: shown while any of the complex's modes is on
     // ('in' does substring search on the "bus,tram" string), and with a line
@@ -676,7 +681,8 @@ async function init() {
       state.tram ? ['in', 'tram', ['get', 'modes']] : false];
     BADGE_NAME_LAYERS.forEach((id, b) => {
       map.setFilter(id, ['all', bandC(b), ['has', 'name'], nameModeC,
-        state.selected ? ['in', state.selected, ['get', 'arr']] : true]);
+        state.journey ? false
+          : state.selected ? ['in', state.selected, ['get', 'arr']] : true]);
     });
     let numC, numField;
     if (state.bus && !state.tram) {
@@ -1040,6 +1046,423 @@ async function init() {
   });
   map.on('mouseenter', 'stops-dots', () => (map.getCanvas().style.cursor = 'pointer'));
   map.on('mouseleave', 'stops-dots', () => (map.getCanvas().style.cursor = ''));
+
+  // ---- Journey planner (beta prototype) ----
+  // Topological search on the line network — NO timetables: direct rides and
+  // one-transfer routes, ranked by ridden kilometres. The ordered stop
+  // sequence of every line is derived here in the browser by PROJECTING the
+  // stops the line serves onto its per-direction polyline (route.geojson),
+  // so no extra pipeline export is needed. Picking a result shows only the
+  // involved lines (existing selection machinery) plus a bold overlay of the
+  // exact ridden segments and the boarding/transfer/alighting stops.
+  wireJourneyPlanner();
+  function wireJourneyPlanner() {
+    const fromEl = document.getElementById('j-from'), toEl = document.getElementById('j-to');
+    const msgEl = document.getElementById('j-msg'), resEl = document.getElementById('j-results');
+    if (!fromEl) return;
+    const msg = (t) => { msgEl.textContent = t; };
+    let gpsPos = null; // [lon,lat] when the start is the GPS fix
+    let net = null, netBuilding = null;
+
+    // equirectangular metres around Kraków — good to ~0.1% at city scale
+    const R = 6371000, rad = Math.PI / 180, cosLat = Math.cos(50.06 * rad);
+    const mx = (ll) => [ll[0] * rad * R * cosLat, ll[1] * rad * R];
+
+    // nearest point of a polyline (metre space): distance, arc position, segment
+    const project = (pm, cum, q) => {
+      let best = { dist: Infinity, at: 0, seg: 0, t: 0 };
+      for (let i = 1; i < pm.length; i++) {
+        const ax = pm[i - 1][0], ay = pm[i - 1][1];
+        const dx = pm[i][0] - ax, dy = pm[i][1] - ay;
+        const len2 = dx * dx + dy * dy;
+        let t = len2 ? ((q[0] - ax) * dx + (q[1] - ay) * dy) / len2 : 0;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const px = ax + t * dx - q[0], py = ay + t * dy - q[1];
+        const dist = Math.sqrt(px * px + py * py);
+        if (dist < best.dist) best = { dist, at: cum[i - 1] + t * Math.sqrt(len2), seg: i - 1, t };
+      }
+      return best;
+    };
+
+    const buildNet = async () => {
+      const [routes, stops] = await Promise.all([
+        fetch('data/route.geojson').then((r) => r.json()),
+        fetch('data/stops.geojson').then((r) => r.json()),
+      ]);
+      // stop poles grouped by NAME — a group is one logical stop
+      const groups = new Map();
+      for (const f of stops.features) {
+        const p = f.properties;
+        let g = groups.get(p.name);
+        if (!g) groups.set(p.name, g = { name: p.name, pts: [], lines: new Set() });
+        g.pts.push(f.geometry.coordinates);
+        for (const l of p.arr) g.lines.add(l);
+      }
+      for (const g of groups.values()) {
+        g.c = g.pts.reduce((a, b) => [a[0] + b[0], a[1] + b[1]], [0, 0]).map((v) => v / g.pts.length);
+        g.cm = mx(g.c);
+      }
+      // per line×direction: polyline + the served groups ordered along it;
+      // groups >65 m off the polyline ride a VARIANT of the line, not this
+      // dominant path — excluded, which is exactly right for routing
+      const byLine = new Map(), nameSet = new Map();
+      for (const f of routes.features) {
+        const p = f.properties;
+        const coords = f.geometry.type === 'LineString' ? f.geometry.coordinates : f.geometry.coordinates.flat();
+        const pm = coords.map(mx), cum = [0];
+        for (let i = 1; i < pm.length; i++) {
+          cum.push(cum[i - 1] + Math.hypot(pm[i][0] - pm[i - 1][0], pm[i][1] - pm[i - 1][1]));
+        }
+        const rec = { line: p.line, mode: p.mode, color: p.color, headsign: p.headsign, coords, pos: new Map() };
+        for (const g of groups.values()) {
+          if (!g.lines.has(p.line)) continue;
+          const pr = project(pm, cum, g.cm);
+          if (pr.dist <= 65) rec.pos.set(g.name, pr);
+        }
+        if (!byLine.has(p.line)) { byLine.set(p.line, []); nameSet.set(p.line, new Set()); }
+        byLine.get(p.line).push(rec);
+        for (const n of rec.pos.keys()) nameSet.get(p.line).add(n);
+      }
+      // transfer matrix: line -> line -> shared stop names (for 2-transfer search)
+      const adj = new Map();
+      for (const [line, names] of nameSet) adj.set(line, new Map());
+      for (const g of groups.values()) {
+        const ls = [...g.lines].filter((l) => nameSet.has(l) && nameSet.get(l).has(g.name));
+        for (const a of ls) for (const b of ls) {
+          if (a === b) continue;
+          const m = adj.get(a);
+          let arr = m.get(b);
+          if (!arr) m.set(b, arr = []);
+          arr.push(g.name);
+        }
+      }
+      return { groups, byLine, nameSet, adj };
+    };
+    const ensureNet = async () => {
+      if (net) return net;
+      if (!netBuilding) netBuilding = buildNet().then((n) => (net = n));
+      return netBuilding;
+    };
+
+    // fill the autocomplete on first interest in the planner
+    document.querySelector('details.journey').addEventListener('toggle', async (e) => {
+      if (!e.target.open) return;
+      await ensureNet();
+      const dl = document.getElementById('stop-list');
+      if (!dl.childElementCount) {
+        for (const name of [...net.groups.keys()].sort((a, b) => a.localeCompare(b, 'pl'))) {
+          const o = document.createElement('option');
+          o.value = name;
+          dl.appendChild(o);
+        }
+      }
+    });
+
+    const norm = (s) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
+    const resolveName = (q) => {
+      const nq = norm(q);
+      if (!nq) return null;
+      let pref = null, sub = null;
+      for (const name of net.groups.keys()) {
+        const nn = norm(name);
+        if (nn === nq) return name;
+        if (nn.startsWith(nq) && (!pref || name.length < pref.length)) pref = name;
+        if (nn.includes(nq) && (!sub || name.length < sub.length)) sub = name;
+      }
+      return pref || sub;
+    };
+    const nearestGroups = (lonlat, maxM, n) => {
+      const q = mx(lonlat);
+      return [...net.groups.values()]
+        .map((g) => ({ g, d: Math.hypot(g.cm[0] - q[0], g.cm[1] - q[1]) }))
+        .filter((x) => x.d <= maxM)
+        .sort((a, b) => a.d - b.d)
+        .slice(0, n);
+    };
+
+    // best ride on one line between two named groups: the direction where the
+    // destination lies AHEAD of the boarding stop
+    const findLeg = (line, fromName, toName) => {
+      let best = null;
+      for (const rec of net.byLine.get(line) || []) {
+        const a = rec.pos.get(fromName), b = rec.pos.get(toName);
+        if (!a || !b || b.at - a.at < 30) continue;
+        if (!best || b.at - a.at < best.m) best = { line, mode: rec.mode, color: rec.color, rec, a, b, m: b.at - a.at, from: fromName, to: toName };
+      }
+      return best;
+    };
+
+    const searchJourneys = (fromNames, toNames, walkM) => {
+      const opts = [], seen = new Set();
+      const fromLines = new Set(), toLines = new Set();
+      for (const n of fromNames) for (const l of net.groups.get(n).lines) fromLines.add(l);
+      for (const n of toNames) for (const l of net.groups.get(n).lines) toLines.add(l);
+      for (const l of fromLines) {
+        if (!toLines.has(l)) continue;
+        for (const fn of fromNames) for (const tn of toNames) {
+          const leg = findLeg(l, fn, tn);
+          if (!leg) continue;
+          const key = l + '|' + fn + '|' + tn;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          opts.push({ legs: [leg], m: leg.m + (walkM.get(fn) || 0) });
+        }
+      }
+      // one-transfer candidates, then options that differ only by the FIRST
+      // line (same boarding stop, same transfer stop, same second ride)
+      // merge into one entry: "5 / 17 / 50 → Politechnika → 904"
+      const merged = new Map();
+      for (const l1 of fromLines) for (const l2 of toLines) {
+        if (l1 === l2) continue;
+        const shared = [...net.nameSet.get(l1)].filter((n) => net.nameSet.get(l2).has(n));
+        for (const fn of fromNames) for (const tn of toNames) {
+          if (fn === tn) continue;
+          let best = null;
+          for (const T of shared) {
+            if (T === fn || T === tn) continue;
+            const leg1 = findLeg(l1, fn, T), leg2 = findLeg(l2, T, tn);
+            if (!leg1 || !leg2) continue;
+            const m = leg1.m + leg2.m;
+            if (!best || m < best.m) best = { legs: [leg1, leg2], m };
+          }
+          if (!best) continue;
+          // 900 m penalty keeps a transfer from outranking a similar direct ride
+          best.m += 900 + (walkM.get(fn) || 0);
+          const key = fn + '>' + best.legs[0].to + '>' + best.legs[1].line;
+          const prev = merged.get(key);
+          if (!prev) merged.set(key, best);
+          else if (best.m < prev.m) { best.alt1 = [...(prev.alt1 || []), prev.legs[0].line]; merged.set(key, best); }
+          else (prev.alt1 = prev.alt1 || []).push(best.legs[0].line);
+        }
+      }
+      opts.push(...merged.values());
+      // TWO transfers, only when simpler options are scarce: middle line L2
+      // links a stop of a start line with a stop of a destination line via
+      // the transfer matrix; both interchange stops chosen to minimise the
+      // total ridden metres. Middle lines already usable directly or with
+      // one transfer are skipped — those rides are covered above.
+      if (opts.length < 3) {
+        const endLines = new Set([...fromLines, ...toLines]);
+        const merged2 = new Map();
+        for (const l1 of fromLines) for (const [l2, shared1] of net.adj.get(l1) || []) {
+          if (endLines.has(l2)) continue;
+          for (const l3 of toLines) {
+            if (l3 === l1 || l3 === l2) continue;
+            const shared2 = net.adj.get(l2).get(l3);
+            if (!shared2) continue;
+            for (const fn of fromNames) for (const tn of toNames) {
+              if (fn === tn) continue;
+              let best = null;
+              for (const T1 of shared1) {
+                if (T1 === fn || T1 === tn) continue;
+                const leg1 = findLeg(l1, fn, T1);
+                if (!leg1) continue;
+                for (const T2 of shared2) {
+                  if (T2 === fn || T2 === tn || T2 === T1) continue;
+                  const leg2 = findLeg(l2, T1, T2), leg3 = findLeg(l3, T2, tn);
+                  if (!leg2 || !leg3) continue;
+                  const m = leg1.m + leg2.m + leg3.m;
+                  if (!best || m < best.m) best = { legs: [leg1, leg2, leg3], m };
+                }
+              }
+              if (!best) continue;
+              best.m += 1800 + (walkM.get(fn) || 0);
+              const key = fn + '>' + best.legs[0].to + '>' + l2 + '>' + best.legs[1].to + '>' + l3;
+              const prev = merged2.get(key);
+              if (!prev) merged2.set(key, best);
+              else if (best.m < prev.m) { best.alt1 = [...(prev.alt1 || []), prev.legs[0].line]; merged2.set(key, best); }
+              else (prev.alt1 = prev.alt1 || []).push(best.legs[0].line);
+            }
+          }
+        }
+        opts.push(...merged2.values());
+      }
+      opts.sort((a, b) => a.legs.length - b.legs.length || a.m - b.m);
+      // one option per distinct line sequence, best first
+      const out = [], used = new Set();
+      for (const o of opts) {
+        const sig = o.legs.map((l) => l.line).join('>');
+        if (used.has(sig)) continue;
+        used.add(sig);
+        out.push(o);
+        if (out.length >= 6) break;
+      }
+      return out;
+    };
+
+    // overlay: the exact ridden segments + boarding/transfer/alighting stops
+    map.addSource('journey', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+      id: 'journey-walk', type: 'line', source: 'journey',
+      filter: ['==', ['get', 'kind'], 'walk'],
+      layout: { 'line-cap': 'round' },
+      paint: { 'line-color': '#556', 'line-width': 3, 'line-dasharray': [0.2, 2] },
+    });
+    map.addLayer({
+      id: 'journey-casing', type: 'line', source: 'journey',
+      filter: ['==', ['get', 'kind'], 'leg'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#ffffff', 'line-width': 11 },
+    });
+    map.addLayer({
+      id: 'journey-line', type: 'line', source: 'journey',
+      filter: ['==', ['get', 'kind'], 'leg'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': ['get', 'color'], 'line-width': 6.5 },
+    });
+    map.addLayer({
+      id: 'journey-line-numbers', type: 'symbol', source: 'journey',
+      filter: ['==', ['get', 'kind'], 'leg'],
+      layout: {
+        'symbol-placement': 'line', 'text-field': ['get', 'line'], 'text-font': [NARROW_BOLD],
+        'text-size': 12.5, 'symbol-spacing': 260, 'text-pitch-alignment': 'viewport',
+      },
+      paint: { 'text-color': ['get', 'color'], 'text-halo-color': '#ffffff', 'text-halo-width': 2.4 },
+    });
+    map.addLayer({
+      id: 'journey-via', type: 'circle', source: 'journey',
+      filter: ['==', ['get', 'kind'], 'via'],
+      paint: { 'circle-radius': 4.5, 'circle-color': '#ffffff', 'circle-stroke-width': 2.2, 'circle-stroke-color': ['get', 'color'] },
+    });
+    map.addLayer({
+      id: 'journey-via-names', type: 'symbol', source: 'journey',
+      filter: ['==', ['get', 'kind'], 'via'],
+      minzoom: 12.5,
+      layout: {
+        'text-field': ['get', 'name'], 'text-font': [NARROW], 'text-size': 11,
+        'text-variable-anchor': ['top', 'bottom', 'left', 'right'], 'text-radial-offset': 0.7,
+      },
+      paint: { 'text-color': '#223344', 'text-halo-color': '#ffffff', 'text-halo-width': 2.2 },
+    });
+    map.addLayer({
+      id: 'journey-pts', type: 'circle', source: 'journey',
+      filter: ['==', ['get', 'kind'], 'stop'],
+      paint: { 'circle-radius': 8, 'circle-color': '#ffffff', 'circle-stroke-width': 3.5, 'circle-stroke-color': KMK_DARK },
+    });
+    map.addLayer({
+      id: 'journey-pts-names', type: 'symbol', source: 'journey',
+      filter: ['==', ['get', 'kind'], 'stop'],
+      layout: {
+        'text-field': ['get', 'name'], 'text-font': [NARROW_BOLD], 'text-size': 13.5,
+        'text-variable-anchor': ['top', 'bottom', 'left', 'right'], 'text-radial-offset': 0.9,
+      },
+      paint: { 'text-color': KMK_DARK, 'text-halo-color': '#ffffff', 'text-halo-width': 2.6 },
+    });
+
+    const sliceLeg = (leg) => {
+      const { coords } = leg.rec;
+      const ip = (S) => {
+        const a = coords[S.seg], b = coords[S.seg + 1] || a;
+        return [a[0] + (b[0] - a[0]) * S.t, a[1] + (b[1] - a[1]) * S.t];
+      };
+      const out = [ip(leg.a)];
+      for (let i = leg.a.seg + 1; i <= leg.b.seg; i++) out.push(coords[i]);
+      out.push(ip(leg.b));
+      return out;
+    };
+
+    const applyJourney = (opt) => {
+      const feats = [];
+      let west = 180, south = 90, east = -180, north = -90;
+      for (const leg of opt.legs) {
+        const line = sliceLeg(leg);
+        for (const c of line) {
+          west = Math.min(west, c[0]); east = Math.max(east, c[0]);
+          south = Math.min(south, c[1]); north = Math.max(north, c[1]);
+        }
+        feats.push({ type: 'Feature', properties: { kind: 'leg', color: leg.color, line: leg.line }, geometry: { type: 'LineString', coordinates: line } });
+        // intermediate stops of the ride (strictly between boarding and alighting)
+        for (const [name, pr] of leg.rec.pos) {
+          if (pr.at > leg.a.at + 1 && pr.at < leg.b.at - 1) {
+            feats.push({ type: 'Feature', properties: { kind: 'via', name, color: leg.color }, geometry: { type: 'Point', coordinates: net.groups.get(name).c } });
+          }
+        }
+      }
+      const stopsSeq = [opt.legs[0].from, ...opt.legs.map((l) => l.to)];
+      for (const name of stopsSeq) {
+        feats.push({ type: 'Feature', properties: { kind: 'stop', name }, geometry: { type: 'Point', coordinates: net.groups.get(name).c } });
+      }
+      if (gpsPos) {
+        feats.push({ type: 'Feature', properties: { kind: 'walk' }, geometry: { type: 'LineString', coordinates: [gpsPos, net.groups.get(opt.legs[0].from).c] } });
+      }
+      map.getSource('journey').setData({ type: 'FeatureCollection', features: feats });
+      state.journey = { lines: [...new Set([...opt.legs.map((l) => l.line), ...(opt.alt1 || [])])] };
+      applyFilters();
+      map.fitBounds([[west, south], [east, north]], { padding: { top: 70, bottom: 40, left: 340, right: 60 }, maxZoom: 14.5 });
+    };
+
+    const clearJourney = () => {
+      state.journey = null;
+      map.getSource('journey').setData({ type: 'FeatureCollection', features: [] });
+      resEl.innerHTML = '';
+      msg('');
+      applyFilters();
+    };
+
+    const esc2 = esc;
+    const renderResults = (opts) => {
+      resEl.innerHTML = '';
+      opts.forEach((o, i) => {
+        const li = document.createElement('li');
+        const parts = o.legs.map((l, li) => {
+          const all = li === 0 && o.alt1 ? [l.line, ...o.alt1] : [l.line];
+          const label = all.slice(0, 5).join(' / ') + (all.length > 5 ? ' …' : '');
+          const tip = all.length > 5 ? ` title="${esc2(all.join(' / '))}"` : '';
+          return `<span class="jl${l.mode === 'tram' ? ' tram' : ''}"${tip}>${esc2(label)}</span> ${esc2(l.from)} &rarr; ${esc2(l.to)}`;
+        });
+        const km = o.legs.reduce((s, l) => s + l.m, 0) / 1000;
+        const tr = o.legs.length - 1;
+        li.innerHTML = `${parts.join('<br>')} <span class="jkm">&middot; ${km.toFixed(1)} km${tr ? ` &middot; ${tr} transfer${tr > 1 ? 's' : ''}` : ''}</span>`;
+        li.addEventListener('click', () => {
+          resEl.querySelectorAll('li').forEach((x) => x.classList.remove('active'));
+          li.classList.add('active');
+          applyJourney(opts[i]);
+        });
+        resEl.appendChild(li);
+      });
+    };
+
+    document.getElementById('j-gps').addEventListener('click', () => {
+      msg('Locating…');
+      if (!navigator.geolocation) { msg('Geolocation is not available in this browser.'); return; }
+      navigator.geolocation.getCurrentPosition((pos) => {
+        gpsPos = [pos.coords.longitude, pos.coords.latitude];
+        fromEl.value = 'My location (GPS)';
+        msg('');
+      }, (e) => msg('GPS unavailable: ' + e.message), { enableHighAccuracy: true, timeout: 8000 });
+    });
+    fromEl.addEventListener('input', () => { gpsPos = null; });
+
+    document.getElementById('j-go').addEventListener('click', async () => {
+      msg('Searching…');
+      resEl.innerHTML = '';
+      await ensureNet();
+      const walkM = new Map();
+      let fromNames;
+      if (gpsPos) {
+        const near = nearestGroups(gpsPos, 900, 3);
+        if (!near.length) { msg('No stop within 900 m of the GPS position.'); return; }
+        for (const x of near) walkM.set(x.g.name, x.d);
+        fromNames = near.map((x) => x.g.name);
+      } else {
+        const n = resolveName(fromEl.value);
+        if (!n) { msg('Start stop not found: ' + fromEl.value); return; }
+        fromEl.value = n;
+        fromNames = [n];
+      }
+      const tn = resolveName(toEl.value);
+      if (!tn) { msg('Destination stop not found: ' + toEl.value); return; }
+      toEl.value = tn;
+      if (fromNames.length === 1 && fromNames[0] === tn) { msg('Start and destination are the same stop.'); return; }
+      const opts = searchJourneys(fromNames, [tn], walkM);
+      if (!opts.length) { msg('No route found with at most two transfers.'); return; }
+      msg('');
+      renderResults(opts);
+      resEl.firstChild.classList.add('active');
+      applyJourney(opts[0]);
+    });
+    document.getElementById('j-clear').addEventListener('click', clearJourney);
+  }
 
   // NOT fitBounds(meta.bbox): the MPK network reaches Wieliczka, Krzeszowice and Niepolomice, so fitting the data
   // bbox would open on countryside with the city as a blob. Open on the city — the
