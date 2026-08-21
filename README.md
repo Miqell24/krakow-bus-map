@@ -7,6 +7,21 @@ written parallel to every street they use, labeled stops, true roundabout arcs.
 
 **Live map:** https://miqell24.github.io/krakow-bus-map/
 
+## Network diagram
+
+`/schematic/` is the second face of this map: an automatic transit diagram of
+the same network (ported from the Rybnik Region map, 21.08.2026). Stop order,
+branches and shared segments come straight from the two ZTP feeds; the station
+graph is contracted into corridors and laid out on an octilinear grid by a
+Stott–Rodgers-style local search with a cost built from geographic anchoring,
+octant fidelity, crossings, overlaps and bends; the Vistula enters the layout
+as a constraint (stations keep their bank, lines cross at their real bridges,
+which are drawn as anchors). `npm run schematic` (`pipeline/schematic/`) reads
+`data/gtfs*`, `data/osm/wisla.json` and `data/osm/bridges.json` and writes
+`data/out/schematic/`; the page exports the whole sheet as one print-quality
+PNG with a legend band. Kraków: 187 lines, 1 464 stations, 906 corridors,
+13 Vistula bridges recognised, crossings 110 → 42 after the layout.
+
 ## Two views
 
 The panel's **Corridors / Lines** switch (ported from the Tricity map, 21.08.2026)

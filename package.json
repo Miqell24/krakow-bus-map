@@ -10,6 +10,7 @@
     "report": "node pipeline/report-gaps.mjs",
     "serve": "node pipeline/serve.mjs 8124",
     "lines": "node pipeline/lines.mjs",
-    "audit": "node --max-old-space-size=6144 pipeline/audit.mjs"
+    "audit": "node --max-old-space-size=6144 pipeline/audit.mjs",
+    "schematic": "node --max-old-space-size=4096 pipeline/schematic/build-schematic.mjs"
   }
 }

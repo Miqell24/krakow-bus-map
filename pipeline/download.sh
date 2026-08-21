@@ -84,3 +84,20 @@ fi
 
 echo "OK — data ready:"
 du -sh data/GTFS_KRK_A.zip data/osm/krakow.json web/vendor/maplibre-gl.js 2>/dev/null || true
+
+# 3) OSM — the Vistula and its bridges, for the network diagram (pipeline/schematic):
+#    the river is a layout CONSTRAINT there (banks, crossings at the real bridges)
+if [ ! -f data/osm/wisla.json ]; then
+  echo "== Overpass (Wisła) =="
+  QW='[out:json][timeout:180];way["waterway"="river"]["name"~"^Wis[łl]a$"](49.93,19.70,50.16,20.30);out geom;'
+  for EP in "https://overpass-api.de/api/interpreter" "https://maps.mail.ru/osm/tools/overpass/api/interpreter" "https://overpass.kumi.systems/api/interpreter"; do
+    curl -fsS --max-time 300 -o data/osm/wisla.json --data-urlencode "data=$QW" "$EP" && break
+  done
+fi
+if [ ! -f data/osm/bridges.json ]; then
+  echo "== Overpass (bridges) =="
+  QB='[out:json][timeout:180];(way["bridge"="yes"]["highway"](49.98,19.80,50.10,20.15);way["bridge"="yes"]["railway"](49.98,19.80,50.10,20.15);way["bridge"="yes"]["man_made"="bridge"](49.98,19.80,50.10,20.15););out geom;'
+  for EP in "https://overpass-api.de/api/interpreter" "https://maps.mail.ru/osm/tools/overpass/api/interpreter" "https://overpass.kumi.systems/api/interpreter"; do
+    curl -fsS --max-time 400 -o data/osm/bridges.json --data-urlencode "data=$QB" "$EP" && break
+  done
+fi

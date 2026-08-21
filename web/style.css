@@ -387,3 +387,6 @@ body.lines-view p.lines-only { display: block; }
 .sw.bundle i:nth-child(3) { background: #b59607; }
 .sw.bundle i:nth-child(4) { background: #126804; }
 .sw.trunk { width: 26px; height: 7px; background: #6f757e; border-radius: 3px; }
+/* the second deliverable of this map: the automatic network diagram */
+.modelink { display: inline-block; margin: 0 0 8px; padding: 4px 10px; border: 1px solid #ccd6e4; border-radius: 7px; background: #f4f7fb; color: var(--kmk); font-weight: 600; font-size: 12.5px; text-decoration: none; }
+.modelink:hover { background: var(--kmk); color: #fff; }
