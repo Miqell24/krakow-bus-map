@@ -75,6 +75,9 @@ export const CONFIG = {
   bendCost: 1.5, // charged per bend when routing a corridor, so it stays straight when it can
 
   // ---------- the Vistula as a layout constraint ----------
+  // OFF for Kraków (user decision 21.08.2026: the band looked terrible on this
+  // sheet). The machinery stays — flip to true and re-run to get it back.
+  river: false,
   riverClipM: 4000, // m from the nearest station — beyond that the river constrains nothing
   riverBinM: 500, // m per centerline bin when collapsing braided channels
   riverPoints: 14, // control points of the schematic river (bridges are added on top)

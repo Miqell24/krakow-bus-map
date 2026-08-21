@@ -49,7 +49,7 @@ let layoutScale = null; // m per grid unit — the diagram's own scale
 let layoutCx = null, layoutCy = null; // origin of the grid, in projected meters
 // the Vistula enters as a CONSTRAINT, before the layout runs — not as a band
 // warped onto the finished diagram
-const riverGeo = cfg.graph ? null : loadRiverGeo(
+const riverGeo = (cfg.graph || cfg.river === false) ? null : loadRiverGeo(
   join(ROOT, 'data/osm/wisla.json'), join(ROOT, 'data/osm/bridges.json'),
   stations, proj, cfg, log);
 

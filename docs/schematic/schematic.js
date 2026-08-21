@@ -510,8 +510,6 @@ function drawLegend(ctx, x, y, meta, scale) {
   disc('#ffffff', '#1d2b36', 5, 'Przystanek', 'Stop');
   disc('#ffffff', '#1d2b36', 8, 'Węzeł przesiadkowy', 'Interchange');
   disc('#0059a9', '#ffffff', 8, 'Przystanek końcowy', 'Terminus');
-  line('#cfe6f7', 'Wisła', 'The Vistula — bridges are the anchors of the drawing');
-  disc('#ffffff', '#6f97b5', 6, 'Most', 'Bridge');
 
   ctx.fillStyle = '#67707c';
   ctx.font = `${12 * s}px system-ui, sans-serif`;
