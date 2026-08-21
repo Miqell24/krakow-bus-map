@@ -17,8 +17,16 @@ const DATA = '../data/schematic/';
 
 let map;
 
+// Pages serves everything with max-age=600 and the data URLs carried no
+// version, so a rebuilt diagram kept showing its previous self for ten minutes
+// (the river the user had just asked to remove). meta.json is fetched fresh
+// and its build stamp versions every other data URL.
+const DATA_V = { v: '' };
+const dataUrl = (name) => DATA + name + (DATA_V.v ? '?v=' + encodeURIComponent(DATA_V.v) : '');
+
 async function init() {
-  const meta = await (await fetch(DATA + 'meta.json')).json();
+  const meta = await (await fetch(DATA + 'meta.json?cb=' + Date.now())).json();
+  DATA_V.v = meta.generatedAt || '';
 
   document.getElementById('stamp').textContent = new Date(meta.generatedAt).toLocaleDateString();
   const c = meta.counts;
@@ -59,7 +67,7 @@ async function init() {
     map.fitBounds(meta.bbox, { padding: 48, animate: false });
 
     for (const name of ['network', 'tram', 'stops', 'numbers', 'terminals', 'river', 'bridges', 'debug']) {
-      map.addSource(name, { type: 'geojson', data: DATA + name + '.geojson' });
+      map.addSource(name, { type: 'geojson', data: dataUrl(name + '.geojson') });
     }
 
     const z = (...stops) => ['interpolate', ['linear'], ['zoom'], ...stops];
@@ -523,7 +531,7 @@ async function exportPng() {
   const btn = document.getElementById('export-png');
   const note = document.getElementById('export-note');
   btn.disabled = true;
-  const meta = await (await fetch(DATA + 'meta.json')).json();
+  const meta = await (await fetch(DATA + 'meta.json?cb=' + Date.now())).json();
   const [W_, S_, E_, N_] = meta.bbox;
 
   // world pixel span of the bbox at EXPORT_ZOOM (Web Mercator)
