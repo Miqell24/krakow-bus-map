@@ -1,12 +1,18 @@
 // GTFS → OSM graph → map matching (HMM) → GeoJSON files for the frontend.
-// Modes: buses (OSM roadways, navy) and trams (railway=tram tracks, red).
-// Usage: node pipeline/build.mjs [--all | lines...] [--tram 1,4]
-// Feeds without shapes.txt are supported: the stop sequence becomes sparse HMM
-// observations and Viterbi routes between stops along the rail graph (unused by
-// the ZTP feeds, which ship dense shapes).
-// Each mode has its own GTFS feed, graph and color; results land in shared files
-// with properties.color/mode, so the frontend styles them data-driven.
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+// Kraków: the KMK network (ZTP Kraków — buses and trams, two feeds of one
+// operator) and, since 23.08.2026, the Wieliczka commune buses of the Wielicka
+// Spółka Transportowa (B2, D2, G3, G4, J1, L1, P2, R2, W2, Z1) on the same
+// sheet. WST publishes no GTFS; pipeline/kp-wst-gtfs.py builds one from the
+// operator's KiedyPrzyjedzie timetables (no shapes, no direction_id — the stop
+// sequence is the observation and the headsign the direction key). Both bus
+// operators pour into one bus cfg; their keys never collide (KMK numbers, WST
+// letter+digit) and the natural sort puts the WST lines after every KMK number.
+// The multi-feed engine is the Warsaw one (per-cfg feeds, REP_MIN_SHARE
+// representative variants, seam closing, cfg.osmFiles).
+// Usage: node pipeline/build.mjs [--all | lines...] [--tram all|1,3,5,…]
+// Results land in shared files with properties.color/mode, so the frontend styles
+// them data-driven.
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { iterCsv, readCsv } from './lib/csv.mjs';
@@ -15,10 +21,10 @@ import { buildGraph } from './lib/graph.mjs';
 import { matchShape, extendToStops } from './lib/hmm.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-// m — longer jumps between shape points are GTFS data gaps (the ZTP feed has
-// ~200 of them; interpolating observations across them fabricated detours into
-// side streets, so inside a gap the HMM bridges by routing instead).
-const GAP_MIN = 120;
+// m — longer jumps between shape points are GTFS data gaps. Inside a real gap
+// the HMM bridges by routing instead of interpolating observations, which would
+// fabricate straight-line detours through side streets.
+const GAP_MIN = 300;
 // m — a pole closer than this to the matched axis is inside the track corridor:
 // its coordinate carries no usable side signal and the half-disc falls back to
 // the right-hand rule (see the stop pass). Named after the case that set it:
@@ -27,6 +33,10 @@ const SIDE_CORRIDOR = 6;
 
 const TROLLEY_GREEN = '#149a3f';
 const TROLLEY_DARK = '#0a5121';
+// unused in this region (no amber metroline category) — kept so the engine
+// code paths stay aligned with the sibling cities
+const MLINE_YELLOW = '#e8a000';
+const MLINE_DARK = '#7d5600';
 
 const t0 = Date.now();
 const log = (m) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${m}`);
@@ -44,6 +54,52 @@ const numSort = (a, b) => {
   return A[0].localeCompare(B[0]) || (A[1] - B[1]) || A[2].localeCompare(B[2]);
 };
 function round6(v) { return Math.round(v * 1e6) / 1e6; }
+// dark variant for feed-supplied line colors (badge rims / terminus fills)
+function darken(hex, f) {
+  const n = parseInt(hex.slice(1), 16);
+  const ch = (v) => Math.round(v * (1 - f)).toString(16).padStart(2, '0');
+  return '#' + ch(n >> 16) + ch((n >> 8) & 255) + ch(n & 255);
+}
+
+// Weld dangling subway endpoints (nodes used by ONE way only) to the nearest
+// vertex of another subway way within 60 m, as synthetic two-node ways.
+// Service tracks stay excluded — this only reconnects the mainline tunnels
+// that OSM left as islands (see the call site for the Bucharest specifics).
+function weldRailGaps(elements) {
+  const SERVICE_X = new Set(['yard', 'siding', 'spur', 'crossover']);
+  const ways = elements.filter((e) => e.type === 'way' && e.tags?.railway === 'subway'
+    && !SERVICE_X.has(e.tags?.service) && e.nodes && e.geometry);
+  const nodeUse = new Map();
+  for (const w of ways) for (const n of w.nodes) nodeUse.set(n, (nodeUse.get(n) || 0) + 1);
+  let synId = -1e9, added = 0;
+  for (const w of ways) {
+    for (const end of [0, w.nodes.length - 1]) {
+      const nid = w.nodes[end];
+      if (nodeUse.get(nid) > 1) continue;
+      const p = w.geometry[end];
+      const kx = 111320 * Math.cos(p.lat * Math.PI / 180);
+      let best = null;
+      for (const o of ways) {
+        if (o === w) continue;
+        for (let i = 0; i < o.nodes.length; i++) {
+          const g = o.geometry[i];
+          const d = Math.hypot((g.lat - p.lat) * 111320, (g.lon - p.lon) * kx);
+          if (d < 60 && (!best || d < best.d)) best = { d, nid: o.nodes[i], g };
+        }
+      }
+      if (best) {
+        elements.push({
+          type: 'way', id: synId--, nodes: [nid, best.nid],
+          geometry: [p, best.g], tags: { railway: 'subway' },
+        });
+        nodeUse.set(nid, 2);
+        nodeUse.set(best.nid, (nodeUse.get(best.nid) || 0) + 1);
+        added++;
+      }
+    }
+  }
+  return added;
+}
 
 // ---------- CLI ----------
 const ARGS = process.argv.slice(2);
@@ -57,16 +113,41 @@ if (ti >= 0) {
 const busAll = busArgs.includes('--all');
 const busList = busArgs.filter((a) => a !== '--all');
 
+// TWO operators, two cfgs: the bus cfg takes the KMK bus feed AND the WST
+// (Wieliczka) feed; the tram cfg takes the KMK tram feed, whose line list is
+// explicit (package.json) because that feed also carries replacement buses
+// under their own numbers.
 const MODES = [{
-  mode: 'bus', label: 'buses', gtfsDir: 'data/gtfs', osmFile: 'data/osm/krakow.json',
+  mode: 'bus', label: 'buses',
+  osmFiles: ['data/osm/krakow.json'],
   graphMode: 'road', color: '#0059a9', colorDark: '#00294f',
   all: busAll, lines: busList.length ? busList : (busAll ? [] : ['102']),
+  feeds: [
+    { tag: 'kmk', dir: 'data/gtfs', mapKey: (sn) => sn, routeTypes: ['3'] },
+    // Wielicka Spółka Transportowa via KiedyPrzyjedzie (pipeline/kp-wst-gtfs.py)
+    { tag: 'wst', dir: 'data/gtfs-wst', mapKey: (sn) => sn, routeTypes: ['3'] },
+  ],
 }];
-if (tramLines.length) MODES.push({
-  mode: 'tram', label: 'trams', gtfsDir: 'data/gtfs-t', osmFile: 'data/osm/krakow-tram.json',
+const tramAll = tramLines.length === 1 && tramLines[0] === 'all';
+// no rail trunk on this sheet (no metro, no suburban rail drawn) — the engine's
+// metro treatment stays switched off
+const isRailTrunk = () => false;
+if (tramAll || tramLines.length) MODES.push({
+  mode: 'tram', label: 'trams', osmFiles: ['data/osm/krakow-tram.json'],
   graphMode: 'tram', color: '#d6212b', colorDark: '#7c1116',
-  all: false, lines: tramLines,
+  all: tramAll, lines: tramAll ? [] : tramLines,
+  feeds: [
+    // ZTP's tram feed codes its trams as extended type 900 (not the plain 0)
+    { tag: 'kmkt', dir: 'data/gtfs-t', mapKey: (sn) => sn, routeTypes: ['0', '900'] },
+  ],
 });
+
+// Feed coordinate fixes: poles the GTFS places on the wrong street, keyed by
+// `<feed tag>:<stop_id>` with the coordinates of that stop's node in OSM. A
+// misplaced pole is not only a dot in the wrong place: where a feed ships no
+// shapes, the stop sequence IS the matching observation, so the whole line gets
+// dragged into a detour. Empty until a pole is found to be wrong.
+const STOP_FIX = {};
 
 function mergeRuns(all) {
   const merged = [];
@@ -126,129 +207,216 @@ async function processMode(cfg) {
   // EVERY line of the set shares it (an all-trolleybus street is green); any mix
   // falls back to the mode color (a bus+trolleybus street stays navy — the green
   // is added there as a dashed overlay by the frontend)
+  // an all-metro mixed set (the shared M1+M3 tunnel, Eroilor–Dristor) must
+  // NOT fall back to the mode color — that is the tram red, and a metro
+  // ribbon in tram red reads as a tram line. Purple = "several metro lines".
+  const METRO_MIX = '#7d2b8b', METRO_MIX_DARK = '#45164e';
+  const isMetroMix = (lines) => cfg.mode === 'tram' && lines.length > 1 && lines.every(isRailTrunk);
   const colorOf = (lines) => {
     if (!cfg.lineColors) return cfg.color;
     const c = cfg.lineColors[lines[0]] || cfg.color;
-    for (const l of lines) if ((cfg.lineColors[l] || cfg.color) !== c) return cfg.color;
+    for (const l of lines) if ((cfg.lineColors[l] || cfg.color) !== c) return isMetroMix(lines) ? METRO_MIX : cfg.color;
     return c;
   };
   const colorDarkOf = (lines) => {
     if (!cfg.lineColorsDark) return cfg.colorDark;
     const c = cfg.lineColorsDark[lines[0]] || cfg.colorDark;
-    for (const l of lines) if ((cfg.lineColorsDark[l] || cfg.colorDark) !== c) return cfg.colorDark;
+    for (const l of lines) if ((cfg.lineColorsDark[l] || cfg.colorDark) !== c) return isMetroMix(lines) ? METRO_MIX_DARK : cfg.colorDark;
     return c;
   };
-  // STASY publishes no shapes.txt — geometry is reconstructed from stop sequences
-  const hasShapes = existsSync(join(ROOT, cfg.gtfsDir, 'shapes.txt'));
-  if (!hasShapes) log('no shapes.txt in this feed — stop sequences become the HMM observations');
-  // more trips sampled when stop sequences ARE the geometry: the longest run must
-  // win over short-turn variants (e.g. M3 to the airport vs Doukissis Plakentias)
-  const tripCap = hasShapes ? 40 : 200;
+  cfg.trolleySet = new Set(); // route_type 11 — green per-line color on the bus mode
+  cfg.mlineSet = new Set(); // no amber metroline category in this region
+  cfg.lineColors = {};
+  cfg.lineColorsDark = {};
 
-  // ---------- 1) routes.txt → line list and route_ids ----------
-  const routes = await readCsv(join(ROOT, cfg.gtfsDir, 'routes.txt'));
-  // OSY data quirk: some short names carry stray whitespace ("14 " vs "14")
-  for (const r of routes) r.route_short_name = (r.route_short_name || '').trim();
-  // trolleybuses (GTFS route_type 11) ride the same roads but get their own color;
-  // the set also flags shared bus+trolleybus roadways for the dashed overlay
-  if (cfg.mode === 'bus') {
-    cfg.trolleySet = new Set(routes.filter((r) => r.route_type === '11').map((r) => r.route_short_name));
-    if (cfg.trolleySet.size) {
-      cfg.lineColors = {}; cfg.lineColorsDark = {};
-      for (const L of cfg.trolleySet) { cfg.lineColors[L] = TROLLEY_GREEN; cfg.lineColorsDark[L] = TROLLEY_DARK; }
-      log(`trolleybus lines (${cfg.trolleySet.size}): ${[...cfg.trolleySet].sort(numSort).join(', ')}`);
-    }
-  }
-  let LINES = cfg.all
-    ? [...new Set(routes.map((r) => r.route_short_name))].sort(numSort)
-    : cfg.lines;
-  const routeToLine = new Map();
-  const missing = [];
-  for (const L of LINES) {
-    const ids = routes.filter((r) => r.route_short_name === L).map((r) => r.route_id);
-    if (!ids.length) { missing.push(L); continue; }
-    for (const id of ids) routeToLine.set(id, L);
-  }
-  if (missing.length) log(`SKIPPED (absent from routes.txt): ${missing.join(', ')}`);
-  LINES = LINES.filter((L) => !missing.includes(L));
-  log(`Lines (${LINES.length}): ${LINES.join(', ')}`);
-
-  // ---------- 2) trips.txt → representative variant (shape) per line+direction ----------
-  const byLineDir = new Map();
-  for await (const t of iterCsv(join(ROOT, cfg.gtfsDir, 'trips.txt'))) {
-    const L = routeToLine.get(t.route_id);
-    if (!L) continue;
-    let dirs = byLineDir.get(L);
-    if (!dirs) byLineDir.set(L, (dirs = new Map()));
-    const dir = t.direction_id || '0';
-    let m = dirs.get(dir);
-    if (!m) dirs.set(dir, (m = new Map()));
-    let e = m.get(t.shape_id);
-    if (!e) m.set(t.shape_id, (e = { count: 0, trips: [] }));
-    e.count++;
-    if (e.trips.length < tripCap) e.trips.push({ trip_id: t.trip_id, headsign: t.trip_headsign });
-  }
+  // ---------- 1–5) four feeds, one network ----------
+  // Every feed loads under its tag: stop ids are namespaced (`ryb:1234`) so the
+  // per-pole aggregation never welds different operators' ids, and the line key
+  // comes from the feed's mapKey (null = skip the route). Reps of all feeds
+  // merge into ONE list — matching, streets, labels and badges downstream see a
+  // single network.
+  const stopsById = new Map();
   let reps = [];
-  for (const L of LINES) {
-    const dirs = byLineDir.get(L);
-    if (!dirs) { log(`SKIPPED line ${L}: no trips in trips.txt`); continue; }
-    for (const dir of [...dirs.keys()].sort()) {
-      const m = dirs.get(dir);
-      let best = null;
-      for (const [shapeId, e] of m) if (!best || e.count > best.e.count) best = { shapeId, e };
-      reps.push({
-        line: L, dir, shapeId: best.shapeId,
-        headsign: best.e.trips[0]?.headsign || '',
-        candTrips: new Set(best.e.trips.map((x) => x.trip_id)),
-        variants: m.size, tripCount: best.e.count,
+  const keyFeeds = new Map(); // line key → Set of feed tags (collision check)
+  for (const feed of cfg.feeds) {
+    const fdir = join(ROOT, feed.dir);
+    const shapesFile = join(fdir, 'shapes.txt');
+    // guard inherited from sibling cities: a header-only shapes.txt counts as absent
+    const hasShapes = existsSync(shapesFile) && statSync(shapesFile).size > 200;
+    // more trips sampled when stop sequences ARE the geometry: the longest run
+    // must win over short-turn variants
+    const tripCap = hasShapes ? 40 : 200;
+
+    const routeToLine = new Map();
+    for (const r of await readCsv(join(fdir, 'routes.txt'))) {
+      if (feed.routeTypes && !feed.routeTypes.includes((r.route_type || '').trim())) continue;
+      if (feed.skipRoute && feed.skipRoute(r)) continue;
+      // feed quirk: some short names carry stray whitespace ("14 " vs "14")
+      const key = feed.mapKey((r.route_short_name || '').trim());
+      if (!key) continue;
+      routeToLine.set(r.route_id, key);
+      if (r.route_type === '11') {
+        cfg.trolleySet.add(key);
+        cfg.lineColors[key] = TROLLEY_GREEN;
+        cfg.lineColorsDark[key] = TROLLEY_DARK;
+      } else if (['1', '2'].includes(r.route_type) && /^[0-9A-F]{6}$/i.test(r.route_color || '')) {
+        // the feed ships the official line colours — metro M1 blue, M2 red,
+        // SKM S1 coral, S2 blue, S3 amber, S4 green, S40 light green
+        cfg.lineColors[key] = '#' + r.route_color.toUpperCase();
+        cfg.lineColorsDark[key] = darken('#' + r.route_color, 0.45);
+      }
+      if (feed.lineColor) {
+        const c = feed.lineColor(key);
+        if (c) { cfg.lineColors[key] = c; cfg.lineColorsDark[key] = darken(c, 0.45); }
+      }
+      let s = keyFeeds.get(key);
+      if (!s) keyFeeds.set(key, (s = new Set()));
+      s.add(feed.tag);
+    }
+
+    // direction_id alone can lie (the Athens/OSY defect; GPA ships no direction_id at all): a
+    // line can carry one constant value on ALL its trips while the return
+    // direction exists as separate trips with a mirrored headsign — grouped by
+    // direction_id alone both directions collapse into one bucket and only the
+    // busier one gets drawn. Pre-scan direction diversity per line; where
+    // direction_id cannot tell directions apart, the headsign is the key.
+    const dirSeen = new Map();
+    for await (const t of iterCsv(join(fdir, 'trips.txt'))) {
+      const L = routeToLine.get(t.route_id);
+      if (!L) continue;
+      let ds = dirSeen.get(L);
+      if (!ds) dirSeen.set(L, (ds = new Set()));
+      ds.add(t.direction_id || '');
+    }
+    const hsKey = (t) => (t.trip_headsign || '').replace(/\s+/g, ' ').trim() || '0';
+
+    const byLineDir = new Map();
+    for await (const t of iterCsv(join(fdir, 'trips.txt'))) {
+      const L = routeToLine.get(t.route_id);
+      if (!L) continue;
+      let dirs = byLineDir.get(L);
+      if (!dirs) byLineDir.set(L, (dirs = new Map()));
+      const dir = (dirSeen.get(L)?.size ?? 0) > 1 ? (t.direction_id || '0') : hsKey(t);
+      let m = dirs.get(dir);
+      if (!m) dirs.set(dir, (m = new Map()));
+      let e = m.get(t.shape_id);
+      if (!e) m.set(t.shape_id, (e = { count: 0, trips: [] }));
+      e.count++;
+      if (e.trips.length < tripCap) e.trips.push({ trip_id: t.trip_id, headsign: t.trip_headsign });
+    }
+
+    // Length per variant, for the pick below — one streaming pass keeping only
+    // a running total and the previous point per shape. Both used by the rule
+    // that the busiest shape of a line+direction is very often a peak-hour
+    // short-turn: the representative is the LONGEST pattern still worked by at
+    // least REP_MIN_SHARE of the busiest pattern's trips (and never a lone
+    // trip). The busiest shape always clears its own bar, so this can only
+    // lengthen a drawn line, never shorten it.
+    const shapeM = new Map();
+    if (hasShapes) {
+      const needed = new Set();
+      for (const dirs of byLineDir.values()) for (const m of dirs.values()) for (const sh of m.keys()) needed.add(sh);
+      const prev = new Map();
+      let unsorted = 0;
+      for await (const sh of iterCsv(shapesFile)) {
+        if (!needed.has(sh.shape_id)) continue;
+        const lat = Number(sh.shape_pt_lat), lon = Number(sh.shape_pt_lon), seq = Number(sh.shape_pt_sequence);
+        const q = prev.get(sh.shape_id);
+        if (q) {
+          if (seq <= q[2]) unsorted++;
+          const k = Math.PI / 180 * 6371008.8;
+          shapeM.set(sh.shape_id, (shapeM.get(sh.shape_id) || 0) +
+            Math.hypot((lon - q[1]) * k * Math.cos(lat * Math.PI / 180), (lat - q[0]) * k));
+        }
+        prev.set(sh.shape_id, [lat, lon, seq]);
+      }
+      if (unsorted) log(`WARNING: shapes.txt not sorted by shape_pt_sequence (${unsorted} rows) — variant lengths approximate`);
+    }
+    const REP_MIN_SHARE = 0.15;
+    let longerReps = 0, longerM = 0;
+
+    const feedReps = [];
+    for (const L of [...byLineDir.keys()].sort(numSort)) {
+      const dirs = byLineDir.get(L);
+      for (const dir of [...dirs.keys()].sort()) {
+        const m = dirs.get(dir);
+        let best = null;
+        for (const [shapeId, e] of m) if (!best || e.count > best.e.count) best = { shapeId, e };
+        if (hasShapes && m.size > 1) {
+          const floor = Math.max(2, best.e.count * REP_MIN_SHARE);
+          const lenOf = (id) => shapeM.get(id) || 0;
+          let pick = best;
+          for (const [shapeId, e] of m) {
+            if (e.count >= floor && lenOf(shapeId) > lenOf(pick.shapeId)) pick = { shapeId, e };
+          }
+          if (pick.shapeId !== best.shapeId) {
+            longerReps++;
+            longerM += lenOf(pick.shapeId) - lenOf(best.shapeId);
+            best = pick;
+          }
+        }
+        feedReps.push({
+          line: L, dir, shapeId: best.shapeId, feedTag: feed.tag,
+          headsign: best.e.trips[0]?.headsign || '',
+          candTrips: new Set(best.e.trips.map((x) => x.trip_id)),
+          variants: m.size, tripCount: best.e.count,
+        });
+      }
+    }
+    if (longerReps) log(`Representative variant: ${longerReps} line-directions moved off the busiest short-turn onto the longest regular pattern (+${(longerM / 1000).toFixed(0)} km drawn)`);
+
+    const allTripIds = new Set();
+    for (const r of feedReps) for (const id of r.candTrips) allTripIds.add(id);
+    const tripStops = new Map();
+    for await (const st of iterCsv(join(fdir, 'stop_times.txt'))) {
+      if (!allTripIds.has(st.trip_id)) continue;
+      let arr = tripStops.get(st.trip_id);
+      if (!arr) tripStops.set(st.trip_id, (arr = []));
+      arr.push({ seq: Number(st.stop_sequence), stopId: feed.tag + ':' + st.stop_id });
+    }
+    for (const r of feedReps) {
+      let bestTrip = null, bestLen = -1;
+      for (const id of r.candTrips) {
+        const n = tripStops.get(id)?.length ?? 0;
+        if (n > bestLen) { bestLen = n; bestTrip = id; }
+      }
+      r.stopSeq = (tripStops.get(bestTrip) || []).sort((a, b) => a.seq - b.seq);
+    }
+
+    // ALL-CAPS feeds get title case; short uppercase tokens survive as
+    // acronyms (PKP, KWK)
+    const titleCase = (s) => s.replace(/[^\s\-,.\/()]+/g, (w) =>
+      (w.length > 3 && w === w.toUpperCase() ? w[0] + w.slice(1).toLowerCase() : w));
+    for (const s of await readCsv(join(fdir, 'stops.txt'))) {
+      // feed names carry double spaces here and there — collapse for clean labels
+      let name = (s.stop_name || '').replace(/\s+/g, ' ').trim();
+      if (feed.titleCase) name = titleCase(name);
+      const fix = STOP_FIX[feed.tag + ':' + s.stop_id];
+      stopsById.set(feed.tag + ':' + s.stop_id, {
+        name,
+        lat: fix ? fix[0] : Number(s.stop_lat),
+        lon: fix ? fix[1] : Number(s.stop_lon),
       });
     }
-  }
 
-  // ---------- 3) stop_times.txt (streaming) → stop sequences ----------
-  const allTripIds = new Set();
-  for (const r of reps) for (const id of r.candTrips) allTripIds.add(id);
-  const tripStops = new Map();
-  for await (const st of iterCsv(join(ROOT, cfg.gtfsDir, 'stop_times.txt'))) {
-    if (!allTripIds.has(st.trip_id)) continue;
-    let arr = tripStops.get(st.trip_id);
-    if (!arr) tripStops.set(st.trip_id, (arr = []));
-    arr.push({ seq: Number(st.stop_sequence), stopId: st.stop_id });
-  }
-  for (const r of reps) {
-    let bestTrip = null, bestLen = -1;
-    for (const id of r.candTrips) {
-      const n = tripStops.get(id)?.length ?? 0;
-      if (n > bestLen) { bestLen = n; bestTrip = id; }
+    if (hasShapes) {
+      const shapeIds = new Set(feedReps.map((r) => r.shapeId));
+      const shapePts = new Map();
+      for await (const s of iterCsv(shapesFile)) {
+        if (!shapeIds.has(s.shape_id)) continue;
+        let arr = shapePts.get(s.shape_id);
+        if (!arr) shapePts.set(s.shape_id, (arr = []));
+        arr.push([Number(s.shape_pt_sequence), Number(s.shape_pt_lat), Number(s.shape_pt_lon)]);
+      }
+      for (const r of feedReps) {
+        const pts = (shapePts.get(r.shapeId) || []).sort((a, b) => a[0] - b[0]);
+        r.shapeLatLon = pts.map((p) => [p[1], p[2]]);
+      }
     }
-    r.stopSeq = (tripStops.get(bestTrip) || []).sort((a, b) => a.seq - b.seq);
-  }
-
-  // ---------- 4) stops.txt (before shapes — stop coords may BE the geometry) ----------
-  const stopsById = new Map();
-  for (const s of await readCsv(join(ROOT, cfg.gtfsDir, 'stops.txt'))) {
-    // OSY names carry double spaces here and there — collapse for clean labels
-    const name = (s.stop_name || '').replace(/\s+/g, ' ').trim();
-    stopsById.set(s.stop_id, { name, lat: Number(s.stop_lat), lon: Number(s.stop_lon) });
-  }
-
-  // ---------- 5) route polylines: shapes.txt, or the stop sequence itself ----------
-  if (hasShapes) {
-    const shapeIds = new Set(reps.map((r) => r.shapeId));
-    const shapePts = new Map();
-    for await (const s of iterCsv(join(ROOT, cfg.gtfsDir, 'shapes.txt'))) {
-      if (!shapeIds.has(s.shape_id)) continue;
-      let arr = shapePts.get(s.shape_id);
-      if (!arr) shapePts.set(s.shape_id, (arr = []));
-      arr.push([Number(s.shape_pt_sequence), Number(s.shape_pt_lat), Number(s.shape_pt_lon)]);
-    }
-    for (const r of reps) {
-      const pts = (shapePts.get(r.shapeId) || []).sort((a, b) => a[0] - b[0]);
-      r.shapeLatLon = pts.map((p) => [p[1], p[2]]);
-      if (r.shapeLatLon.length < 2) log(`SKIPPED ${r.line}/${r.dir}: empty shape ${r.shapeId}`);
-    }
-  } else {
-    for (const r of reps) {
+    // per-rep fallback: an empty shape (or a shapeless feed) → the stop
+    // sequence itself becomes the HMM observation chain
+    for (const r of feedReps) {
+      if (r.shapeLatLon && r.shapeLatLon.length >= 2) continue;
       r.pseudo = true;
       r.shapeLatLon = r.stopSeq
         .map((s) => stopsById.get(s.stopId))
@@ -256,8 +424,41 @@ async function processMode(cfg) {
         .map((st) => [st.lat, st.lon]);
       if (r.shapeLatLon.length < 2) log(`SKIPPED ${r.line}/${r.dir}: not enough stops for a pseudo-shape`);
     }
+    // trim the shape to the passenger stretch: depot-happy shapes overshoot the
+    // termini into depot access tracks (M2's tail runs 3 km past Tudor
+    // Arghezi towards the Berceni depot — outside OSM passenger rails, so it
+    // matched as breaks and raw chords)
+    for (const r of feedReps) {
+      if (r.pseudo || r.stopSeq.length < 2) continue;
+      const near = (st) => {
+        let bi = 0, bd = Infinity;
+        for (let i = 0; i < r.shapeLatLon.length; i++) {
+          const [la, lo] = r.shapeLatLon[i];
+          const d = Math.hypot((la - st.lat) * 111320, (lo - st.lon) * 111320 * Math.cos(st.lat * Math.PI / 180));
+          if (d < bd) { bd = d; bi = i; }
+        }
+        return bi;
+      };
+      const s0 = stopsById.get(r.stopSeq[0].stopId);
+      const s1 = stopsById.get(r.stopSeq[r.stopSeq.length - 1].stopId);
+      if (!s0 || !s1) continue;
+      const i0 = near(s0), i1 = near(s1);
+      if (i1 - i0 >= 2 && (i0 > 0 || i1 < r.shapeLatLon.length - 1)) {
+        if (i0 > 5 || i1 < r.shapeLatLon.length - 6) log(`  shape trim ${r.line}/${r.dir}: kept ${i0}..${i1} of ${r.shapeLatLon.length} points (depot tails dropped)`);
+        r.shapeLatLon = r.shapeLatLon.slice(i0, i1 + 1);
+      }
+    }
+    log(`feed ${feed.tag}: ${new Set(feedReps.map((r) => r.line)).size} lines, ${feedReps.length} reps` +
+        (hasShapes ? '' : ' (no shapes — stop-sequence pseudo)'));
+    reps.push(...feedReps);
+  }
+  for (const [key, tags] of keyFeeds) {
+    if (tags.size > 1) log(`WARNING: line key "${key}" comes from several feeds (${[...tags].join(', ')}) — they will merge into one line`);
   }
   reps = reps.filter((r) => r.shapeLatLon.length >= 2);
+  if (!cfg.all) reps = reps.filter((r) => cfg.lines.includes(r.line));
+  const LINES = [...new Set(reps.map((r) => r.line))].sort(numSort);
+  log(`Lines (${LINES.length}): ${LINES.join(', ')}`);
 
   // ---------- 6) local projection + graph ----------
   let latMin = Infinity, latMax = -Infinity, lonMin = Infinity, lonMax = -Infinity;
@@ -266,7 +467,33 @@ async function processMode(cfg) {
     if (lon < lonMin) lonMin = lon; if (lon > lonMax) lonMax = lon;
   }
   const proj = makeProj((latMin + latMax) / 2, (lonMin + lonMax) / 2);
-  const osm = JSON.parse(readFileSync(join(ROOT, cfg.osmFile), 'utf8'));
+  // one extract, or several merged (a region grown after the first download):
+  // later files only ADD ways the earlier ones do not have
+  const osm = { elements: [] };
+  {
+    const seen = new Set();
+    for (const file of cfg.osmFiles || [cfg.osmFile]) {
+      const part = JSON.parse(readFileSync(join(ROOT, file), 'utf8'));
+      let added = 0;
+      for (const e of part.elements) {
+        const k = e.type + e.id;
+        if (seen.has(k)) continue;
+        seen.add(k); osm.elements.push(e); added++;
+      }
+      log(`OSM ${file}: ${part.elements.length} elements (${added} new)`);
+    }
+  }
+  // railKeep: this cfg sees only its own kind of rails (see MODES above);
+  // railExtra admits single oddballs from other layers (the rack railway)
+  if (cfg.railKeep) osm.elements = osm.elements.filter((e) => cfg.railKeep.has(e.tags?.railway) || (cfg.railExtra && cfg.railExtra(e)));
+  // Guard inherited from Bucharest, where OSM mapped the metro as
+  // per-direction tunnels that meet nowhere: every dangling subway endpoint
+  // gets welded to the nearest other-way vertex within 60 m so Viterbi can
+  // route through. A no-op wherever the tunnels are drawn connected.
+  if (cfg.railKeep?.has('subway')) {
+    const n = weldRailGaps(osm.elements);
+    if (n) log(`welded ${n} dangling subway endpoints to nearby tracks`);
+  }
   const graph = buildGraph(osm.elements, proj, cfg.graphMode);
   log(`Graph (${cfg.graphMode}): ${graph.nodes.size} nodes, ${graph.segs.length} segments, ${graph.ways.size} ways`);
 
@@ -281,15 +508,14 @@ async function processMode(cfg) {
     const xy = r.shapeLatLon.map(([lat, lon]) => proj.toXY(lat, lon));
     let sampled, opts;
     if (r.pseudo) {
-      // stations as sparse observations: wider candidate net (platform centroids
-      // sit beside the track axis), softer emission/transition — the routing
-      // between consecutive stations does the geometric work. ONE wide radius:
-      // the radii array is a fallback (a wider net is cast only when the narrow
-      // one is empty), and at interchange stations the other line's trackage
-      // fills the narrow net so this line's tunnel would never be seen (M1 vs M3
-      // at Monastiraki). perWay keeps the list diverse despite dense station tracks.
+      // stops as sparse observations (fallback for trips without a shape):
+      // poles sit roadside, sometimes in bays — wider net and softer emission
+      // than shape matching, soft beta because consecutive stops are 300–600 m
+      // apart and the routing between them IS the geometry. gapMin stays OFF
+      // (Infinity): with routing doing the drawing, the oneway penalties are
+      // exactly what keeps dual carriageways directional.
       sampled = xy;
-      opts = { sigma: 20, beta: 64, radii: [150], maxCand: 24, perWay: 2 };
+      opts = { sigma: 15, beta: 64, radii: [60, 90], maxCand: 16 };
     } else {
       let gaps = 0, maxGap = 0;
       for (let i = 1; i < xy.length; i++) {
@@ -300,8 +526,15 @@ async function processMode(cfg) {
       sampled = resample(xy, 20, GAP_MIN);
       // gapMin: gap legs bridge on raw meters (soft oneway penalties off) — a
       // 2.5× contraflow surcharge otherwise out-costs real distance and the
-      // bridge circles the block instead of following the corridor
+      // bridge circles the block (X499 rectangle at El Kafr, user report:
+      // Nahia Axis' eastbound carriageway is unmapped in OSM there)
       opts = { gapMin: GAP_MIN };
+      // metro shapes are tunnel approximations — often 40–70 m off the OSM
+      // subway axis (street-grid drawn), so the snap net widens and the
+      // emission softens; surface trams keep the tight default
+      if (cfg.mode === 'tram' && isRailTrunk(r.line)) {
+        opts = { sigma: 15, radii: [60, 120], maxCand: 16, gapMin: GAP_MIN };
+      }
     }
     const res = matchShape(graph, sampled, opts);
     if (!res) { log(`SKIPPED ${r.line}/${r.dir}: matching failed`); continue; }
@@ -365,6 +598,12 @@ async function processMode(cfg) {
 
   // ---------- 8) stops: merge by stop_id, line list, snap to routes ----------
   const stopAgg = new Map();
+  // A stop is a LOOP when the formal network ends there — or when enough
+  // paratransit routes end together to make a real depot/hub. A single survey
+  // endpoint of an informal route is not a loop: counting those made a
+  // terminus out of 37% of Cairo's stops (user report: every other stop
+  // rendered as a pętla).
+  const PARA_TERM_MIN = 3;
   for (const r of reps) {
     r.stopSeq.forEach((s, i) => {
       const st = stopsById.get(s.stopId);
@@ -380,7 +619,7 @@ async function processMode(cfg) {
   // interchanges) platform records into a single entry keyed by name — one disc,
   // one label (user report: Irini drawn twice, once off the tracks).
   if (cfg.mode === 'tram') {
-    const isMetroEntry = (e) => [...e.lines].every((l) => l.startsWith('M'));
+    const isMetroEntry = (e) => [...e.lines].every(isRailTrunk);
     const byStation = new Map();
     for (const [id, e] of stopAgg) {
       if (!isMetroEntry(e)) continue;
@@ -409,7 +648,7 @@ async function processMode(cfg) {
   const farNames = [];
   for (const e of stopAgg.values()) {
     const [sx, sy] = proj.toXY(e.lat, e.lon);
-    const isMetroStop = cfg.mode === 'tram' && [...e.lines].every((l) => l.startsWith('M'));
+    const isMetroStop = cfg.mode === 'tram' && [...e.lines].every(isRailTrunk);
     let best = null, bestRun = null;
     // candidates are ONLY the runs that actually call at this pole: on a
     // double-track street the pole of one direction can lie nearer the
@@ -424,12 +663,13 @@ async function processMode(cfg) {
     // A stop drawn beside its own line reads as a bug, so the disc goes ON the
     // line even when the pole coordinate is poor — 200 m of rescue covers the
     // sloppy ones (Lyski Rondo stands 115 m off the roadway in the source data).
-    // Metro gets a wider net still: station coords are entrance-based and can
-    // sit well off the track axis (Irini: >80 m).
+    // Metro gets a wider net still: station coords in STASY are entrance-based
+    // and can sit well off the track axis (Irini: >80 m).
     const useSnap = best && best.d <= (isMetroStop ? 250 : 200);
     // Beyond that the pole cannot be placed honestly: its own line is drawn
-    // somewhere else entirely. A disc stranded off the network is worse than a
-    // missing stop, so it is left out and logged.
+    // somewhere else entirely (tram 44 keeps four stops on the central tracks
+    // that neither the TPBI shape nor OSM knows anymore). A disc stranded in
+    // open country is worse than a missing stop, so it is left out and logged.
     if (!useSnap) { stopsFar++; farNames.push(`${e.name} (${Math.round(best ? best.d : -1)} m)`); continue; }
     const [lon, lat] = proj.toLonLat(best.x, best.y);
     // half-disc orientation: flat edge along the street, bulge toward the pole's
@@ -455,7 +695,16 @@ async function processMode(cfg) {
       sideInfo = { phi, dataSide: Math.sign(cross), offM };
     }
     const arr = [...e.lines].sort(numSort);
+    // metroline membership for the independent metrolines toggle
+    let mstop = null;
+    if (cfg.mlineSet && cfg.mlineSet.size) {
+      const n = arr.filter((l) => cfg.mlineSet.has(l)).length;
+      mstop = n === arr.length ? 'all' : (n ? 'mix' : null);
+    }
     const termArr = [...e.term].sort(numSort);
+    const paraEnd = cfg.mlineSet ? termArr.filter((l) => cfg.mlineSet.has(l)).length : 0;
+    const formalEnd = termArr.length > paraEnd;
+    const terminus = formalEnd || paraEnd >= PARA_TERM_MIN ? 1 : 0;
     stopFeatures.push({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [round6(lon), round6(lat)] },
@@ -463,7 +712,7 @@ async function processMode(cfg) {
         name: e.name,
         lines: arr.join(', '),
         arr,
-        terminus: termArr.length ? 1 : 0,
+        terminus,
         // terminating lines only — consumed by the badge-anchor pass below and
         // stripped before the geojson is written
         termArr,
@@ -474,6 +723,7 @@ async function processMode(cfg) {
         ...(sideInfo ? { sideInfo } : {}),
         // metro stations render as full discs (no roadside pole side to show)
         ...(isMetroStop ? { metro: 1 } : {}),
+        ...(mstop ? { mstop } : {}),
         snapDist: best ? Math.round(best.d) : null,
       },
     });
@@ -555,21 +805,25 @@ async function processMode(cfg) {
   }
   log(`Stops: ${stopFeatures.length} poles, ${labelCount} labels`);
 
-  // Terminus badge ANCHORS: every labeled terminus with the lines that end there
+  // Terminus badge ANCHORS: every labeled terminus with the lines that END there
+  // (not every line that calls — a Cairo corridor stop where one microbus route
+  // ends sees dozens of through lines, and listing those built 150-box walls)
   // and their colors. The grid layout — and the fusing of grids that would collide
   // on screen — happens in a shared pass after all modes, so neighbouring loops of
   // ANY mode merge into one box complex.
   const badgeAnchors = [];
   for (const f of stopFeatures) {
     const p = f.properties;
-    // the lines that END here, not every line that calls: a corridor stop where
-    // one route turns back otherwise built a wall of boxes for its through lines
     if (p.terminus && p.label && p.badgeLines && p.badgeLines.length) {
       badgeAnchors.push({
         lon: f.geometry.coordinates[0],
         lat: f.geometry.coordinates[1],
         name: p.name,
-        lines: p.badgeLines.map((line) => ({ line, mode: p.mode, color: colorOf([line]), colorDark: colorDarkOf([line]) })),
+        lines: p.badgeLines.map((line) => ({
+          line, mode: p.mode, color: colorOf([line]), colorDark: colorDarkOf([line]),
+          // metro rides the tram slot but answers to its own frontend toggle
+          ...(p.mode === 'tram' && isRailTrunk(line) ? { metro: 1 } : {}),
+        })),
       });
     }
     delete p.termArr;
@@ -604,7 +858,7 @@ async function processMode(cfg) {
       // Clip the run's outer ends to the traveled t-envelope of the first and
       // last segment: a long straight segment ridden for only its first meters
       // otherwise draws in full and leaves a dangling stub past the real
-      // turnaround (spur tips, mid-block route ends).
+      // turnaround (Al Wafaa spur tips, mid-block route ends).
       const pm = posSeg.get(wayId);
       const lerp = (A, B, t) => [round6(A[0] + (B[0] - A[0]) * t), round6(A[1] + (B[1] - A[1]) * t)];
       const iv0 = segIv.get(pm.get(start));
@@ -634,7 +888,12 @@ async function processMode(cfg) {
       if (n === arr.length) flags.trolley = 'all';
       else if (n > 0) flags.trolley = 'mix';
     }
-    if (cfg.mode === 'tram' && arr.every((l) => l.startsWith('M'))) flags.metro = 1;
+    if (cfg.mode === 'tram' && arr.every(isRailTrunk)) flags.metro = 1;
+    if (cfg.mlineSet && cfg.mlineSet.size) {
+      const n = arr.filter((l) => cfg.mlineSet.has(l)).length;
+      if (n === arr.length) flags.mline = 'all';
+      else if (n > 0) flags.mline = 'mix';
+    }
     return flags;
   };
   const mergedRuns = mergeRuns(runs);
@@ -1032,11 +1291,36 @@ const metaLines = results.flatMap((r) => r.metaLines);
     if (ang < -90) ang += 180;
     return { c, ang, dx, dy };
   };
+  // Cairo corridors carry up to ~100 paratransit routes; a label listing all of
+  // them is unreadable and kilometers long — display caps at 12 + a "+N" tail.
+  // (`arr` stays complete: the frontend filters and highlights on it.)
+  const PSET = MODES[0].mlineSet || new Set();
+  const TSET = new Set(MODES.flatMap((m) => [...(m.trolleySet || [])])); // trolleybus numbers
+  const capList = (s) => {
+    const a = s.split(', ');
+    return a.length > 14 ? a.slice(0, 12).join(', ') + ' +' + (a.length - 12) : s;
+  };
   for (const g of groups.values()) {
     const p = g.best.f.properties;
     const arr = p.busLines ? [...p.lines.split(', '), ...p.busLines.split(', ')] : p.lines.split(', ');
-    const baseProps = { lines: p.lines, color: p.color, mode: p.mode, arr };
+    const baseProps = { lines: p.lines, color: p.color, mode: p.mode, arr, ...(p.metro ? { metro: 1 } : {}) };
     if (p.busLines) baseProps.busLines = p.busLines;
+    // mixed bus+trolleybus roadway: the label keeps the trolleybus numbers
+    // GREEN in a two-colour row (user 14.08.2026, Athens pattern) —
+    // all-trolleybus sets already come out green whole via colorOf
+    if (p.mode === 'bus' && TSET.size) {
+      const tl = arr.filter((l) => TSET.has(l));
+      if (tl.length && tl.length < arr.length) {
+        baseProps.tLines = tl.join(', ');
+        baseProps.ntLines = arr.filter((l) => !TSET.has(l)).join(', ');
+      }
+    }
+    // mixed paratransit corridors carry both halves so the frontend can show
+    // only the relevant one when a single network is toggled on
+    if (p.mode === 'bus' && p.mline === 'mix') {
+      baseProps.mLines = capList(arr.filter((l) => PSET.has(l)).join(', '));
+      baseProps.nmLines = capList(arr.filter((l) => !PSET.has(l)).join(', '));
+    }
     const anchors = [];
     // The collision engine knows nothing about the STROKES, so on a dual
     // carriageway the row happily settles between the roadways — parked on
@@ -1159,9 +1443,9 @@ const metaLines = results.flatMap((r) => r.metaLines);
 const badgeFeatures = [];
 // Grids are fused for the WORST CASE inside a band (its lower zoom edge), so
 // wide bands mean badly oversized complexes near the band's top — the
-// whole-map poster renders around z13.9 and with a [13,14] band the fused
-// complexes (sized for z13.0) boxed out their neighbours' stop names.
-// Narrower bands keep the fusion honest at every zoom.
+// whole-map poster renders around z13.9 and with a [13,14] band the Kaponiera
+// complex (fused for z13.0) boxed out its neighbours' stop names. Narrower
+// bands keep the fusion honest at every zoom.
 const BADGE_BANDS = [[13, 13.6], [13.6, 14.4], [14.4, 15.5], [15.5, 16.8], [16.8, 22]];
 {
   const anchors = results.flatMap((r) => r.badgeAnchors);
@@ -1170,6 +1454,15 @@ const BADGE_BANDS = [[13, 13.6], [13.6, 14.4], [14.4, 15.5], [15.5, 16.8], [16.8
   // 3-digit box outgrew a 3.0/1.5 em cell and neighbours overlapped, so the
   // cells are wider than the naive text estimate.
   const PER_ROW = 5, CELL_W = 3.4, CELL_H = 2.0, BASE_Y = 1.1;
+  // MapLibre stores glyph offsets as Int16 (offset px × 32, at the 24 px layout
+  // em): past ±42.6 em the value WRAPS — the numbers of rows 21+ detached from
+  // their boxes and landed ~40 em above the complex (Ataba: bottom rows empty,
+  // a cloud of bare numbers over Al-Shohadaa). Mega-complexes therefore grow
+  // WIDE instead of tall — target ≤6 rows (squat grids also blot out less of
+  // the street grid on the poster), columns capped at 24 (the x offsets hit
+  // the same Int16 wall at ±42 em; rows only pass 20 — y 41.1 em — beyond
+  // 500 lines in one complex, hence the emission-time warning below).
+  const perRowOf = (n) => Math.min(24, Math.max(PER_ROW, Math.ceil(n / 6)));
   const EM = 9, PAD = 10; // px: label em size in the band, plus breathing room
   // Name-row metrics. The frontend wraps names at text-max-width 10 em with
   // line-height 1.1 (set explicitly in app.js) — roughly 18 chars per line at
@@ -1183,23 +1476,16 @@ const BADGE_BANDS = [[13, 13.6], [13.6, 14.4], [14.4, 15.5], [15.5, 16.8], [16.8
   // names lose their loops. Clusters that collide but may not fuse are pushed
   // apart by the separation pass below instead.
   const MAX_NAMES = 3;
-  // MapLibre stores glyph offsets as Int16 (offset px × 32, at the 24 px layout
-  // em): past ±42.6 em the value WRAPS and the numbers of rows 21+ detach from
-  // their boxes, landing ~40 em above the complex. Mega-complexes therefore
-  // grow WIDE instead of tall — target ≤6 rows (squat grids also blot out less
-  // of the street grid on the poster), columns capped at 24 (the x offsets hit
-  // the same wall).
-  const perRowOf = (n) => Math.min(24, Math.max(PER_ROW, Math.ceil(n / 6)));
-  // …and at most MAX_LINES boxes: fused downtown complexes walled over whole
-  // blocks of streets and nobody could tell which loop the lines belonged to.
-  // A single loop that alone carries more lines stays intact — the cap only
-  // stops MERGING.
+  // …and at most MAX_LINES boxes: on the whole-map poster the downtown fusions
+  // walled over whole blocks of streets and nobody could tell which loop the
+  // lines belonged to (user report at Abdel Moneim Riad). A single loop that
+  // alone carries more lines stays intact — the cap only stops MERGING.
   const MAX_LINES = 20;
   // Crowded complexes SHRINK: past SC_FREE lines the whole grid — boxes,
   // numbers and name rows — scales down (to 0.7 at the largest loops), so the
-  // poster bands stop hiding the street grid under badge walls. The zoom-in
-  // bands keep full size: there is room at street level, and 0.7 × 10 px would
-  // be squinting territory in the field.
+  // poster bands stop hiding the street grid under badge walls (user report,
+  // second round). The zoom-in bands keep full size: there is room at street
+  // level, and 0.7 × 10 px would be squinting territory in the field.
   const SC_FREE = 12;
   const scFor = (band, n) => {
     if (band >= 3 || n <= SC_FREE) return 1;
@@ -1301,10 +1587,16 @@ const BADGE_BANDS = [[13, 13.6], [13.6, 14.4], [14.4, 15.5], [15.5, 16.8], [16.8
       const [lon, lat] = P2.toLonLat(c.x, c.y);
       // The terminus NAME(S) ride with the complex: reserved rows stacked
       // right above the grid, drawn unconditionally like the boxes. The
-      // collision-managed name layer could stay nameless at saturated nodes —
-      // and a nameless loop is a hard error on a printed map, so from z13
-      // these rows replace it.
-      const modes = [...new Set(lines.map((l) => l.mode))].join(',');
+      // collision-managed name layer could stay nameless at saturated nodes
+      // (Bałtyk at Kaponiera) — and a nameless loop is a hard error on a
+      // printed map, so from z13 these rows replace it.
+      // metro contributes 'metro', not 'tram' — the name row follows whichever
+      // of the complex's networks is still toggled on
+      const modes = [...new Set(lines.map((l) => (l.metro ? 'metro' : l.mode)))].join(',');
+      // a complex where EVERY terminating line is a metrolinia follows the
+      // metrolines toggle (its boxes are filtered per-box by color)
+      const mall = lines.every((l) => l.color === MLINE_YELLOW) ? 1 : 0;
+      const msome = lines.some((l) => l.color === MLINE_YELLOW) ? 1 : 0;
       // per-complex shrink rides along as `sc` — the frontend multiplies the
       // band's constant text size by it (em offsets follow the font size, so
       // the whole grid scales as one)
@@ -1315,7 +1607,7 @@ const BADGE_BANDS = [[13, 13.6], [13.6, 14.4], [14.4, 15.5], [15.5, 16.8], [16.8
         badgeFeatures.push({
           type: 'Feature',
           geometry: { type: 'Point', coordinates: [round6(lon), round6(lat)] },
-          properties: { name: nm, band, modes, arr: lines.map((l) => l.line), off: [0, -Math.round(yOff * 100) / 100], ...(nscC < 1 ? { sc: nscC } : {}) },
+          properties: { name: nm, band, modes, arr: lines.map((l) => l.line), off: [0, -Math.round(yOff * 100) / 100], ...(nscC < 1 ? { sc: nscC } : {}), ...(mall ? { mall: 1 } : {}), ...(msome ? { msome: 1 } : {}) },
         });
         yOff += nameRows(nm) * NAME_LH;
       }
@@ -1329,6 +1621,7 @@ const BADGE_BANDS = [[13, 13.6], [13.6, 14.4], [14.4, 15.5], [15.5, 16.8], [16.8
           geometry: { type: 'Point', coordinates: [round6(lon), round6(lat)] },
           properties: {
             line: l.line, mode: l.mode, color: l.color, colorDark: l.colorDark, band,
+            ...(l.metro ? { metro: 1 } : {}),
             ...(scC < 1 ? { sc: scC } : {}),
             off: [
               Math.round((col - (rowLen - 1) / 2) * CELL_W * 100) / 100,

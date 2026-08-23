@@ -30,7 +30,13 @@ const RAIL_OK = new Set(['subway', 'tram', 'light_rail', 'rail']);
 function tramAccess(tags) {
   if (!tags || !RAIL_OK.has(tags.railway)) return null;
   const s = tags.service;
-  if (s === 'yard' || s === 'siding' || s === 'spur' || s === 'crossover') return null;
+  // Crossovers are how a train changes track at a junction — excluding them
+  // tore the SKM lines apart at Warszawa Zachodnia/Ochota/Wschodnia, and the
+  // cross-city tunnel's platform tracks at Śródmieście are tagged siding, so
+  // heavy rail keeps its sidings too. Tram sidings, yards and spurs (depot
+  // tracks) stay out, as everywhere in the family.
+  if (s === 'yard' || s === 'spur') return null;
+  if (s === 'siding' && tags.railway !== 'rail') return null;
   return { restricted: false, driveway: false };
 }
 

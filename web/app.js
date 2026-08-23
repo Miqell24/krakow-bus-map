@@ -182,7 +182,7 @@ async function init() {
   map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), 'top-right');
   map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: true, showUserHeading: true, fitBoundsOptions: { maxZoom: 15.5 } }), 'top-right');
   map.addControl(new maplibregl.ScaleControl({ maxWidth: 120 }), 'bottom-left');
-  map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: 'Timetables: GTFS ZTP Kraków' }));
+  map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: 'Timetables: GTFS ZTP Kraków · WST Wieliczka (kiedyPrzyjedzie.pl)' }));
 
   const [meta, linesMeta] = await Promise.all([
     fetch('data/meta.json').then((r) => r.json()),
@@ -1216,7 +1216,7 @@ async function init() {
         const fs = Math.max(16, Math.round(out.width / 130));
         ctx.font = `${fs}px sans-serif`;
         ctx.textBaseline = 'bottom';
-        const txt = '© OpenStreetMap contributors · OpenFreeMap · GTFS: ZTP Kraków';
+        const txt = '© OpenStreetMap contributors · OpenFreeMap · GTFS: ZTP Kraków · WST Wieliczka (kiedyPrzyjedzie.pl)';
         const tw = ctx.measureText(txt).width;
         ctx.fillStyle = 'rgba(255,255,255,0.82)';
         ctx.fillRect(out.width - tw - fs, out.height - fs * 1.7, tw + fs, fs * 1.7);
@@ -1460,7 +1460,7 @@ async function init() {
             const fs = Math.max(16, Math.round(Wf / 500));
             cx.font = `${fs}px sans-serif`;
             cx.textBaseline = 'bottom';
-            const txt = '© OpenStreetMap contributors · OpenFreeMap · GTFS: ZTP Kraków';
+            const txt = '© OpenStreetMap contributors · OpenFreeMap · GTFS: ZTP Kraków · WST Wieliczka (kiedyPrzyjedzie.pl)';
             const tw = Math.min(cx.measureText(txt).width, wpx - fs);
             cx.fillStyle = 'rgba(255,255,255,0.82)';
             cx.fillRect(wpx - tw - fs, hpx - fs * 1.7, tw + fs, fs * 1.7);

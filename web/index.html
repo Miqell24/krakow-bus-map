@@ -43,12 +43,13 @@
     <summary>Switch city</summary>
     <nav>
       <span class="current">Kraków</span>
+      <a href="https://miqell24.github.io/krakow-mld-bus-map/">Kraków + MLD (Małopolska feeder lines)</a>
       <a href="https://miqell24.github.io/poznan-bus-map/">Poznań</a>
       <a href="https://miqell24.github.io/gzm-bus-map/">GZM Metropolis (Katowice)</a>
       <a href="https://miqell24.github.io/rybnik-bus-map/">Rybnik Region (Żory · Jastrzębie · Wodzisław)</a>
       <a href="https://miqell24.github.io/trojmiasto-bus-map/">Tricity (Gdańsk–Gdynia–Sopot)</a>
       <a href="https://miqell24.github.io/grodzisk-bus-map/">Grodzisk Mazowiecki Region</a>
-      <a href="https://miqell24.github.io/warsaw-bus-map/">Warsaw &amp; Grodzisk Mazowiecki</a>
+      <a href="https://miqell24.github.io/warsaw-bus-map/">Warsaw Region (Warsaw · Grodzisk Maz. · communes)</a>
       <a href="https://miqell24.github.io/vienna-bus-map/">Vienna</a>
       <a href="https://miqell24.github.io/budapest-bus-map/">Budapest</a>
       <a href="https://miqell24.github.io/paris-bus-map/">Paris</a>
@@ -90,6 +91,7 @@
     <li class="lines-only"><span class="sw bundle"><i></i><i></i><i></i><i></i></span> Up to 4 lines: each on its own, in its own colour</li>
     <li class="lines-only"><span class="sw trunk"></span> 5 or more: one grey stroke, its numbers beside it</li>
     <li><label><input type="checkbox" id="toggle-bus" checked> <span class="sw line corridor-only"></span> Bus routes</label></li>
+    <li class="sublegend corridor-only">KMK Kraków (MPK) &middot; Wieliczka commune buses WST (B2&ndash;Z1) &mdash; listed after the KMK numbers</li>
     <li><label><input type="checkbox" id="toggle-tram" checked> <span class="sw line corridor-only tram"></span> Tram routes</label></li>
     <li><span class="sw stop"></span> Stop</li>
     <li><span class="sw terminus"></span> Terminus</li>
@@ -128,7 +130,7 @@
     <button id="export-area" title="Drag a rectangle on the map; that area is rendered as a large print-quality PNG">Export PNG — select area</button>
     <button id="export-atlas" title="The ENTIRE network as one poster-grade PNG at ~65 000 px on the long edge, streamed together in the browser (takes several minutes, keep the tab open)">Export PNG — whole map</button>
   </div>
-  <div id="footer">Data: GTFS ZTP Kraków · <span id="stamp"></span></div>
+  <div id="footer">Data: GTFS ZTP Kraków · WST Wieliczka (via kiedyPrzyjedzie.pl) · <span id="stamp"></span></div>
   <label class="debug"><input type="checkbox" id="toggle-shape"> show raw GTFS shapes (QA)</label>
 </aside>
 <script src="vendor/maplibre-gl.js"></script>

@@ -40,6 +40,16 @@ if [ ! -f data/gtfs-t/routes.txt ]; then
   unzip -o data/GTFS_KRK_T.zip -d data/gtfs-t
 fi
 
+# 1c) GTFS — Wieliczka commune buses (Wielicka Spółka Transportowa). No GTFS
+#     exists anywhere (odt.org.pl: request pending, "Brak umowy z dostawcą"); the
+#     operator's KiedyPrzyjedzie instance is the only machine-readable timetable,
+#     and pipeline/kp-wst-gtfs.py turns its public web API into a plain GTFS
+#     (one school day + one holiday date inside the horizon).
+if [ ! -f data/gtfs-wst/routes.txt ]; then
+  echo "== WST (Wieliczka) via KiedyPrzyjedzie =="
+  python3 pipeline/kp-wst-gtfs.py data/gtfs-wst
+fi
+
 # 2) OSM — roadways in the bbox of the whole bus network (GTFS shapes extent + margin;
 #    suburban 2xx lines reach Krzeszowice, Skała, Świątniki), incl. highway=construction
 if [ ! -f data/osm/krakow.json ]; then

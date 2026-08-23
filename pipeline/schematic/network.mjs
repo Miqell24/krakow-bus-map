@@ -15,6 +15,10 @@ export async function readFeed(root, feed, cfg, log) {
   const routes = await readCsv(join(dir, 'routes.txt'));
   const routeToLine = new Map();
   for (const r of routes) {
+    // a multi-mode feed is split by route_type per cfg feed entry (Warsaw: one
+    // ZTM bundle carries buses, trams, metro and SKM)
+    if (feed.routeTypes && !feed.routeTypes.includes((r.route_type || '').trim())) continue;
+    if (feed.skipRoute && feed.skipRoute(r)) continue;
     // the feed's own key rule decides what a line is called here, and null
     // drops the route entirely (depot runs, lines duplicated by another feed)
     const key = feed.mapKey
@@ -94,7 +98,10 @@ export async function readFeed(root, feed, cfg, log) {
       name,
       lat: Number(s.stop_lat),
       lon: Number(s.stop_lon),
-      group: dash > 0 ? code.slice(0, dash) : (code || s.stop_id),
+      // a feed may name its own rule (ZTM Warszawa: stop_id = 4-digit complex +
+      // 2-digit pole, and stop_code is only the pole); otherwise the code's
+      // dash/slash convention, else the id
+      group: feed.groupOf ? feed.groupOf(s) : (dash > 0 ? code.slice(0, dash) : (code || s.stop_id)),
     });
   }
 

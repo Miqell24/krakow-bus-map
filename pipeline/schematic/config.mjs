@@ -15,6 +15,9 @@ export const CONFIG = {
       mapKey: (sn) => sn },
     { mode: 'tram', label: 'MPK Kraków — trams', gtfsDir: 'data/gtfs-t', color: '#d6212b', colorDark: '#7c1116',
       mapKey: (sn) => (TRAM_LINES.has(sn) ? sn : null) },
+    // Wieliczka commune buses (WST) — GTFS built from KiedyPrzyjedzie by pipeline/kp-wst-gtfs.py
+    { mode: 'bus', label: 'Wielicka Spółka Transportowa', gtfsDir: 'data/gtfs-wst', color: '#0059a9', colorDark: '#00294f',
+      routeTypes: ['3'], mapKey: (sn) => sn },
   ],
 
   // variants: a stop-sequence pattern of a line+direction is a real branch when

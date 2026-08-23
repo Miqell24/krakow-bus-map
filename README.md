@@ -1,9 +1,17 @@
 # krakow-bus-map
 
 Interactive web map of Kraków public transport (KMK) in the visual logic of the
-official KMK network map: **164 bus lines and 23 tram lines** drawn exactly along
-roadways and tracks (own HMM/Viterbi map matching on an OSM graph), line numbers
-written parallel to every street they use, labeled stops, true roundabout arcs.
+official KMK network map: **164 bus lines and 23 tram lines** — plus, since
+23.08.2026, the **10 Wieliczka commune buses** of the Wielicka Spółka
+Transportowa (B2, D2, G3, G4, J1, L1, P2, R2, W2, Z1) on the same sheet — drawn
+exactly along roadways and tracks (own HMM/Viterbi map matching on an OSM
+graph), line numbers written parallel to every street they use, labeled stops,
+true roundabout arcs. WST publishes no GTFS anywhere (odt.org.pl: "Brak umowy z
+dostawcą"); `pipeline/kp-wst-gtfs.py` builds one from the operator's own
+KiedyPrzyjedzie timetables (public web API, no shapes, no direction_id — stop
+sequences are the matching observations). The sister sheet
+[krakow-mld-bus-map](https://miqell24.github.io/krakow-mld-bus-map/) adds the
+Małopolskie Linie Dowozowe on all of Małopolska.
 
 **Live map:** https://miqell24.github.io/krakow-bus-map/
 
