@@ -1,0 +1,36 @@
+{
+  "id": "2026-08-13",
+  "label": "13 Aug 2026",
+  "generatedAt": "2026-09-03T12:43:54.014Z",
+  "note": "Rebuilt 3.09.2026 from the MPK snapshots of 2026-08-13 (buses) and 2026-08-12 (trams), MobilityDatabase snapshot; today's OSM, WST as of 23.08; changed: buses",
+  "feeds": [
+    {
+      "dir": "/private/tmp/claude-501/-Users-mikolajolszewski-Desktop/c8b351ed-2a07-4936-8603-23614bb09c2c/scratchpad/krk-hist/data/gtfs",
+      "tag": "MPK buses",
+      "publisher": "Miejskie Przedsiębiorstwo Komunikacyjne S.A. w Krakowie",
+      "version": "20260812_20260813",
+      "start": "20260812",
+      "end": "20270131",
+      "label": "MPK buses 12.08.2026"
+    },
+    {
+      "dir": "/private/tmp/claude-501/-Users-mikolajolszewski-Desktop/c8b351ed-2a07-4936-8603-23614bb09c2c/scratchpad/krk-hist/data/gtfs-t",
+      "tag": "MPK trams",
+      "publisher": "ZTP",
+      "version": "20260812",
+      "start": "",
+      "end": "",
+      "label": "MPK trams 12.08.2026"
+    },
+    {
+      "dir": "/private/tmp/claude-501/-Users-mikolajolszewski-Desktop/c8b351ed-2a07-4936-8603-23614bb09c2c/scratchpad/krk-hist/data/gtfs-wst",
+      "tag": "WST Wieliczka",
+      "publisher": "WST timetables via kiedyPrzyjedzie.pl (converted by krakow-bus-map/pipeline/kp-wst-gtfs.py)",
+      "version": "20260823",
+      "start": "20260825",
+      "end": "20260902",
+      "label": "WST Wieliczka 23.08.2026"
+    }
+  ],
+  "archivedAt": "2026-09-03T12:43:55.393Z"
+}

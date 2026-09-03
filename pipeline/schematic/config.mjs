@@ -1,9 +1,19 @@
 // Schematic mode configuration. Every numeric knob of the layout cost lives
 // here and can be overridden from the CLI: npm run schematic -- --iters=80 --w4=8
 // Weights follow the agreed cost specification (w1…w8).
-// the tram lines the geographic map draws (package.json build script) — the
-// tram feed also lists replacement buses under their own numbers
-const TRAM_LINES = new Set('1,3,5,8,9,10,11,13,14,16,17,18,20,21,22,49,50,52,62,69,74,75,76'.split(','));
+// the tram lines the geographic map draws — since 3.09.2026 decided by
+// pipeline/tram-lines.py (a route of the tram feed is a tram when its shape
+// lies on the tracks; the feed also lists replacement buses under their own
+// numbers) and read here from the current build's meta.json, so the diagram
+// always shows the same trams as the map. The literal list is the fallback
+// for a diagram built before any map build.
+import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+const META = join(dirname(fileURLToPath(import.meta.url)), '../../data/out/meta.json');
+const TRAM_LINES = new Set(existsSync(META)
+  ? JSON.parse(readFileSync(META, 'utf8')).lines.filter((l) => l.mode === 'tram').map((l) => l.line)
+  : '1,3,5,8,9,10,11,13,14,16,17,18,20,21,22,49,50,52,62,69,74,75,76'.split(','));
 
 export const CONFIG = {
   // GTFS intake — mirrors the MODES of pipeline/build.mjs, minus everything OSM

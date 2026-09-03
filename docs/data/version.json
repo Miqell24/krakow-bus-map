@@ -1,0 +1,35 @@
+{
+  "id": "2026-09-03",
+  "label": "3 Sept 2026",
+  "generatedAt": "2026-09-03T12:54:14.149Z",
+  "feeds": [
+    {
+      "dir": "data/gtfs",
+      "tag": "MPK buses",
+      "publisher": "Miejskie Przedsiębiorstwo Komunikacyjne S.A. w Krakowie",
+      "version": "20260829_20260901",
+      "start": "20260829",
+      "end": "20270131",
+      "label": "MPK buses 29.08.2026"
+    },
+    {
+      "dir": "data/gtfs-t",
+      "tag": "MPK trams",
+      "publisher": "ZTP",
+      "version": "20260829",
+      "start": "",
+      "end": "",
+      "label": "MPK trams 29.08.2026"
+    },
+    {
+      "dir": "data/gtfs-wst",
+      "tag": "WST Wieliczka",
+      "publisher": "WST timetables via kiedyPrzyjedzie.pl (converted by krakow-bus-map/pipeline/kp-wst-gtfs.py)",
+      "version": "20260823",
+      "start": "20260825",
+      "end": "20260902",
+      "label": "WST Wieliczka 23.08.2026"
+    }
+  ],
+  "archivedAt": "2026-09-03T12:54:14.260Z"
+}

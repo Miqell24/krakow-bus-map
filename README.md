@@ -40,6 +40,67 @@ the lines' colours. `npm run lines` (`pipeline/lines.mjs`) derives the strand
 files from `data/out/`; `npm run audit` checks the drawn result (torn ends,
 folds, doubles, every line one connected piece).
 
+## Timeline — the map's versions
+
+The panel's **Map version** row (3.09.2026) switches between dated versions of the
+network in place: the camera, the view, the base, the picked line, the label
+sizes, the density and the mode filters all stay as they are — only the data
+changes (MapLibre re-tiles the new GeoJSON and re-runs label placement, with the
+settings the layers already hold). Versions are picked by DATE: each one is a
+build of `data/out/`, archived by `pipeline/snapshot.mjs` under
+`data/out/versions/<YYYY-MM-DD>/` and listed in `data/out/versions.json` with the
+feeds it came from and its line list (the row shows the lines added and removed
+since the previous version). `#v=2026-08-21` in the URL opens a given version.
+
+**What an archived version holds** (user decision, 3.09.2026: `docs/` must stay
+small): the corridor view (`streets`, `labels`, `stops`, `street-names`,
+`badges`, `meta`) and the lines view (`lines-*`) — 17 MB on disk, 2 MB on the
+wire, of which the corridor view is 1.1 MB. Left out: `route.geojson` (12 MB,
+read only by the journey planner, which therefore works on the current build
+only — the card says so), the raw GTFS trace (QA) and the network diagram
+(it draws the current build anyway). `--full` keeps everything; `--slim` trims
+older archives to the rule. Git itself hardly grows: identical files are one
+blob, and a new build costs ~2 MB in the pack — it is the checkout (`docs/`)
+that carries every version in full.
+
+**The 2026 series.** MPK republishes its feeds every few days, and in 2026 the
+network really changed with them (the summer works: detours, temporary tram
+lines 70/73/77, tram 17 gone in September). The timeline holds every distinct
+NETWORK of the year the sources reach (snapshots whose lines, stop sequences
+and shapes are identical collapse into one — `scratchpad/feed-sig.py` logic):
+- 13.03.2026 — the ZTP feeds captured by the Wayback Machine (the only 2026
+  capture there);
+- 26.07.2026 — the feeds this map was first published from;
+- 1.08 … 29.08.2026 — the MobilityDatabase snapshot history (mdb-1326 buses,
+  mdb-1270 trams; its website shows the last ten per feed, the older ones sit
+  behind the API's login), one version per distinct network;
+- the current build (feeds of 29.08.2026).
+Historical versions are rebuilt with today's pipeline on today's OSM (roads
+that changed since are matched as they are now), every version carries the WST
+Wieliczka snapshot of 23.08 (the operator publishes no history), and a version's
+date is the day its feeds appeared. January, February and April–June are missing:
+no public copy of those feeds was found (a MobilityDatabase account would list
+them all through the API).
+
+**Which routes of the tram feed are trams.** ZTP codes every route of
+`GTFS_KRK_T` as type 900, replacement buses and temporary tram lines alike, all
+under their own numbers — so the line list used to be typed by hand in
+`package.json`. `pipeline/tram-lines.py` decides it from the geometry instead:
+a route whose shape points lie on OSM tram tracks (≥ 70 %) is a tram, the rest
+are buses on a detour (in March 2026: 4 and 8). `npm run build` takes its
+`--tram` list from it.
+
+- `npm run build` keeps its predecessor by itself: `prebuild` archives the
+  current `data/out/`, `postbuild` stamps the new build with its feeds
+  (`data/out/version.json`) and rebuilds the list.
+- `npm run snapshot` archives the current build by hand; `npm run snapshot --
+  --index` only rebuilds the list; `npm run snapshot -- --src DIR --id 2026-08-21
+  --note "…" --feeds dir1,dir2` imports an outside build (a historical feed built
+  in a scratch copy of the project, or `docs/data` of an old commit:
+  `git archive <sha> docs/data | tar -x -C /tmp/x`).
+- A version without the lines files greys the Lines segment out; a picked line
+  the other version lacks is let go with a note.
+
 ## Features
 
 - GTFS (ZTP Kraków) matched onto the OSM road/tram network — mean error ~0.3 m,

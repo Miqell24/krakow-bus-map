@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Kraków Public Transport — interactive map</title>
 <link rel="stylesheet" href="vendor/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=20260826c">
+<link rel="stylesheet" href="style.css?v=20260903a">
 </head>
 <body>
 <div id="map"></div>
@@ -109,6 +109,20 @@
     <button type="button" data-bg="paper">Paper base</button>
     <button type="button" data-bg="grey">Grey base</button>
   </div>
+  <div id="timeline" class="timeline" hidden
+       title="The map's dated versions: switch between builds of the network without losing the view, the zoom or any setting.">
+    <div class="tl-row">
+      <span class="lbl">Map version</span>
+      <button type="button" id="tl-prev" aria-label="Previous version">&#9664;</button>
+      <span id="tl-val"></span>
+      <button type="button" id="tl-next" aria-label="Next version">&#9654;</button>
+    </div>
+    <input id="tl-range" type="range" min="0" max="0" step="1" value="0" list="tl-ticks" aria-label="Timeline of the map's versions">
+    <datalist id="tl-ticks"></datalist>
+    <p id="tl-info" class="hint"></p>
+    <p id="tl-feeds" class="hint feeds"></p>
+    <p id="tl-note" class="hint note" hidden></p>
+  </div>
   <p class="hint viewhint corridor-only">One stroke per roadway, the whole network in its mode colours.</p>
   <p class="hint viewhint lines-only">Every line drawn on its own, in its own colour — up to four side by side.</p>
   <ul class="legend">
@@ -158,7 +172,7 @@
   <label class="debug"><input type="checkbox" id="toggle-shape"> show raw GTFS shapes (QA)</label>
 </aside>
 <script src="vendor/maplibre-gl.js"></script>
-<script src="app.js?v=20260822a"></script>
+<script src="app.js?v=20260903a"></script>
 <script>
 (() => {
   // City-switch filter: type instead of scrolling. Matches the English name,
