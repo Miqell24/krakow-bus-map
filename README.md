@@ -1,17 +1,43 @@
 # krakow-bus-map
 
 Interactive web map of Kraków public transport (KMK) in the visual logic of the
-official KMK network map: **164 bus lines and 23 tram lines** — plus, since
-23.08.2026, the **10 Wieliczka commune buses** of the Wielicka Spółka
-Transportowa (B2, D2, G3, G4, J1, L1, P2, R2, W2, Z1) on the same sheet — drawn
+official KMK network map: **176 bus lines and 23 tram lines**, the **10
+Wieliczka commune buses** of the Wielicka Spółka Transportowa (B2, D2, G3, G4,
+J1, L1, P2, R2, W2, Z1) and — since 9.09.2026 — the **three SKA lines** of
+Koleje Małopolskie, the region's commuter rail: **202 lines / 6 364 km**, drawn
 exactly along roadways and tracks (own HMM/Viterbi map matching on an OSM
 graph), line numbers written parallel to every street they use, labeled stops,
-true roundabout arcs. WST publishes no GTFS anywhere (odt.org.pl: "Brak umowy z
+true roundabout arcs. Weighted mean matching error 0.5 m.
+
+**SKA1** Wieliczka Rynek-Kopalnia – Kraków Główny – Kraków Lotnisko, **SKA2**
+Sędziszów – Kraków – Oświęcim and **SKA3** Tarnów – Kraków – Oświęcim ride
+their own toggle, on the rail slice of the OSM graph, with the rail-trunk
+treatment: a wide ribbon, station discs, names that never fade. They are drawn
+WHOLE — SKA3 is 142 km end to end — the way the Berlin map draws its RB/RE and
+the Vienna map its REX: a line that belongs on the sheet belongs on it to its
+last station.
+
+They keep the operator's own colours (the feed ships them, and commuter rail is
+this family's exception to the mode-colour rule, as a metro is). The rest of
+what Koleje Małopolskie run on rails — the Dunajec, the Hubal, the Luxtorpeda
+to Zakopane, the unnumbered KML to Jasło — is a Małopolska matter, not a Kraków
+one, and rides the sister sheet
+[krakow-mld-bus-map](https://miqell24.github.io/krakow-mld-bus-map/).
+
+Koleje Małopolskie's own GTFS files every train under the brand "KML" and never
+names a line, so the SKA numbers come from the sanitised copy
+gtfs.kasznia.net rebuilds from it (CC BY, kasmar00/gtfs-polish-trains). It
+ships no shapes, so the station sequence is the matching observation; the
+Kraków junction is a building site and the ways OSM tags `construction`,
+`disused` or `proposed` on main-line track are admitted and renamed to what
+they are being built as before the graph is built (the Vienna
+Verbindungsbahn rule) — 139 of them here. No breaks anywhere in the three
+lines. WST publishes no GTFS anywhere (odt.org.pl: "Brak umowy z
 dostawcą"); `pipeline/kp-wst-gtfs.py` builds one from the operator's own
 KiedyPrzyjedzie timetables (public web API, no shapes, no direction_id — stop
 sequences are the matching observations). The sister sheet
 [krakow-mld-bus-map](https://miqell24.github.io/krakow-mld-bus-map/) adds the
-Małopolskie Linie Dowozowe on all of Małopolska.
+same operator's Małopolskie Linie Dowozowe buses on all of Małopolska.
 
 **Live map:** https://miqell24.github.io/krakow-bus-map/
 
@@ -125,7 +151,7 @@ Node ≥ 18 (no npm dependencies), `curl`, `unzip`, internet on first run.
 ## Usage
 
 ```bash
-npm run download   # ZTP GTFS + OSM (Overpass) + MapLibre (cached in data/ and web/vendor/)
+npm run download   # GTFS (ZTP, WST, SKA) + OSM (Geofabrik + pyosmium) + MapLibre (cached in data/ and web/vendor/)
 npm run build      # extraction + map matching + GeoJSON files into data/out/
 npm run serve      # http://localhost:8124
 ```

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Kraków Public Transport — interactive map</title>
 <link rel="stylesheet" href="vendor/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=20260903a">
+<link rel="stylesheet" href="style.css?v=20260909b">
 </head>
 <body>
 <div id="map"></div>
@@ -137,6 +137,8 @@
     <li><label><input type="checkbox" id="toggle-bus" checked> <span class="sw line corridor-only"></span> Bus routes</label></li>
     <li class="sublegend corridor-only">KMK Kraków (MPK) &middot; Wieliczka commune buses WST (B2&ndash;Z1) &mdash; listed after the KMK numbers</li>
     <li><label><input type="checkbox" id="toggle-tram" checked> <span class="sw line corridor-only tram"></span> Tram routes</label></li>
+    <li><label><input type="checkbox" id="toggle-ska" checked> <span class="sw line corridor-only ska"></span> SKA commuter rail</label></li>
+    <li class="sublegend corridor-only">Koleje Ma&#322;opolskie SKA1 <span class="mini ska1"></span> SKA2 <span class="mini ska2"></span> SKA3 <span class="mini ska3"></span> &mdash; drawn to their real ends. The operator&rsquo;s long-distance trains ride the <a href="https://miqell24.github.io/krakow-mld-bus-map/">Ma&#322;opolska sheet</a>.</li>
     <li><span class="sw stop"></span> Stop</li>
     <li><span class="sw terminus"></span> Terminus</li>
   </ul>
@@ -178,8 +180,8 @@
   <label class="debug"><input type="checkbox" id="toggle-shape"> show raw GTFS shapes (QA)</label>
 </aside>
 <script src="vendor/maplibre-gl.js"></script>
-<script src="app.js?v=20260908n"></script>
-<script src="pdf-export.js?v=20260908i"></script>
+<script src="app.js?v=20260909b"></script>
+<script src="pdf-export.js?v=20260909b"></script>
 <script>
 (() => {
   // City-switch filter: type instead of scrolling. Matches the English name,

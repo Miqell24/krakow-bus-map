@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Downloads input data: ZTP GTFS feeds, OSM road network (Overpass), MapLibre GL.
+# Downloads input data: the GTFS feeds (ZTP Kraków, WST Wieliczka, Koleje
+# Małopolskie's SKA), the OSM networks (Geofabrik + pyosmium) and MapLibre GL.
 # Everything is cached — re-running only fetches what is missing.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-mkdir -p data/gtfs data/gtfs-t data/osm web/vendor
+mkdir -p data/gtfs data/gtfs-t data/gtfs-wst data/gtfs-ska data/osm web/vendor
 
 # A downloaded extract is only accepted if it PARSES and carries a plausible
 # number of elements. `grep -q '"elements"'` — the guard this family used
@@ -50,39 +51,36 @@ if [ ! -f data/gtfs-wst/routes.txt ]; then
   python3 pipeline/kp-wst-gtfs.py data/gtfs-wst
 fi
 
-# 2) OSM — roadways in the bbox of the whole bus network (GTFS shapes extent + margin;
-#    suburban 2xx lines reach Krzeszowice, Skała, Świątniki), incl. highway=construction
-if [ ! -f data/osm/krakow.json ]; then
-  echo "== Overpass =="
-  Q='[out:json][timeout:300];way(49.882,19.564,50.265,20.373)["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|busway|construction|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"];out geom;'
-  ok=0
-  for EP in "https://overpass-api.de/api/interpreter" \
-            "https://maps.mail.ru/osm/tools/overpass/api/interpreter" \
-            "https://overpass.kumi.systems/api/interpreter"; do
-    echo "-- $EP"
-    if curl -fsS --max-time 300 -o data/osm/krakow.json --data-urlencode "data=$Q" "$EP" \
-       && ok_json "data/osm/krakow.json" 2000; then
-      ok=1; break
-    fi
-  done
-  [ "$ok" = 1 ] || { rm -f data/osm/krakow.json; echo "Overpass: all mirrors failed" >&2; exit 1; }
+# 1e) GTFS — Koleje Małopolskie's rail timetable, for the SKA lines. The
+#     producer's own file (gtfs.kolejemalopolskie.com.pl, linked from
+#     odt.org.pl) files every train under the brand "KML" and never names a
+#     line, so the SKA numbers exist only in the sanitised copy that
+#     gtfs.kasznia.net rebuilds from it (CC BY, kasmar00/gtfs-polish-trains):
+#     SKA1, SKA2 and SKA3 as proper routes, with the operator's colours.
+if [ ! -f data/gtfs-ska/routes.txt ]; then
+  echo "== SKA (Koleje Małopolskie) =="
+  curl -fL --retry 3 --max-time 300 -o data/ska-gtfs.zip "https://gtfs.kasznia.net/static/sanitized/kml.zip"
+  unzip -o data/ska-gtfs.zip -d data/gtfs-ska
 fi
 
-# 2b) OSM — tram tracks (separate network: railway=tram, not roadways)
-if [ ! -f data/osm/krakow-tram.json ]; then
-  echo "== Overpass (trams) =="
-  QT='[out:json][timeout:120];way(49.95,19.77,50.15,20.25)["railway"~"^(tram|light_rail)$"];out geom;'
-  ok=0
-  for EP in "https://maps.mail.ru/osm/tools/overpass/api/interpreter" \
-            "https://overpass-api.de/api/interpreter" \
-            "https://overpass.kumi.systems/api/interpreter"; do
-    echo "-- $EP"
-    if curl -fsS --max-time 180 -o data/osm/krakow-tram.json --data-urlencode "data=$QT" "$EP" \
-       && ok_json "data/osm/krakow-tram.json" 40; then
-      ok=1; break
+# 2) OSM — from the Geofabrik voivodeship extracts, not Overpass. On 9.09.2026
+#    every public mirror answered these queries with 504 for an hour (the wall
+#    Berlin, London, São Paulo and Vienna hit before), so the cuts are made
+#    locally: pipeline/pbf-cut.py (needs `pip3 install --user osmium`) writes
+#    exactly the JSON Overpass would have returned, node ids included, for
+#    three boxes — the city's roads, the tram tracks, and the main-line track
+#    the SKA trains need, which reaches Sędziszów, Tarnów and Oświęcim and so
+#    reads świętokrzyskie as well as małopolskie.
+if [ ! -f data/osm/krakow.json ] || [ ! -f data/osm/krakow-tram.json ] || [ ! -f data/osm/krakow-rail.json ]; then
+  python3 -c "import osmium" 2>/dev/null || { echo "brak pakietu osmium — zainstaluj: pip3 install --user osmium" >&2; exit 1; }
+  for V in malopolskie swietokrzyskie; do
+    if [ ! -f "data/$V-latest.osm.pbf" ]; then
+      echo "== Geofabrik $V-latest.osm.pbf =="
+      curl -fL --retry 5 --retry-delay 5 -C - --max-time 3600 -o "data/$V-latest.osm.pbf"         "https://download.geofabrik.de/europe/poland/$V-latest.osm.pbf"
     fi
   done
-  [ "$ok" = 1 ] || { rm -f data/osm/krakow-tram.json; echo "Overpass (tram): all mirrors failed" >&2; exit 1; }
+  echo "== cutting OSM out of the extracts =="
+  python3 pipeline/pbf-cut.py
 fi
 
 # 3) MapLibre GL (vendored, no CDN at runtime)
