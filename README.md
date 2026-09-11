@@ -100,7 +100,12 @@ and shapes are identical collapse into one — `scratchpad/feed-sig.py` logic):
 - 1.08 … 29.08.2026 — the MobilityDatabase snapshot history (mdb-1326 buses,
   mdb-1270 trams; its website shows the last ten per feed, the older ones sit
   behind the API's login), one version per distinct network;
-- the current build (feeds of 29.08.2026).
+- 3.09.2026 — the build of the feeds of 29.08.2026 (trams: 511 gone);
+- 9.09.2026 (current) — the feeds of 1.09 (buses), 5.09 (trams) and the WST of
+  9.09; SKA1–SKA3 of Koleje Małopolskie join, 70, 73, 402, 427, 497 and 703
+  are gone. (The 3.09 build went live without the timeline being re-stamped,
+  so until 11.09 the row described the previous build — fixed by importing
+  that build from git.)
 Historical versions are rebuilt with today's pipeline on today's OSM (roads
 that changed since are matched as they are now), every version carries the WST
 Wieliczka snapshot of 23.08 (the operator publishes no history), and a version's

@@ -1,36 +1,36 @@
 {
-  "id": "2026-09-09",
-  "label": "9 Sept 2026",
-  "generatedAt": "2026-09-09T08:53:35.543Z",
-  "note": "SKA1–SKA3 of Koleje Małopolskie join; 70, 73, 402, 427, 497 and 703 are gone from the MPK feed of 1.09.2026",
+  "id": "2026-09-03",
+  "label": "3 Sept 2026",
+  "generatedAt": "2026-09-03T12:54:14.149Z",
+  "note": "The MPK feeds of 29.08.2026 (buses and trams), WST as of 23.08; 511 gone",
   "feeds": [
     {
       "dir": "data/gtfs",
       "tag": "MPK buses",
       "publisher": "Miejskie Przedsiębiorstwo Komunikacyjne S.A. w Krakowie",
-      "version": "20260901_20260907",
-      "start": "20260901",
+      "version": "20260829_20260901",
+      "start": "20260829",
       "end": "20270131",
-      "label": "MPK buses 01.09.2026"
+      "label": "MPK buses 29.08.2026"
     },
     {
       "dir": "data/gtfs-t",
       "tag": "MPK trams",
       "publisher": "ZTP",
-      "version": "20260905",
+      "version": "20260829",
       "start": "",
       "end": "",
-      "label": "MPK trams 05.09.2026"
+      "label": "MPK trams 29.08.2026"
     },
     {
       "dir": "data/gtfs-wst",
       "tag": "WST Wieliczka",
       "publisher": "WST timetables via kiedyPrzyjedzie.pl (converted by krakow-bus-map/pipeline/kp-wst-gtfs.py)",
-      "version": "20260909",
+      "version": "20260823",
       "start": "20260825",
       "end": "20260902",
-      "label": "WST Wieliczka 09.09.2026"
+      "label": "WST Wieliczka 23.08.2026"
     }
   ],
-  "archivedAt": "2026-09-11T07:22:24.161Z"
+  "archivedAt": "2026-09-11T07:22:23.944Z"
 }

@@ -413,6 +413,7 @@ async function init() {
   // keep the mode colour and the night numbers are black.
   const sectionRow = (pre) => { const r = ['format']; for (let i = 0; i < 24; i++) r.push(['coalesce', ['get', pre + 'l' + i], ''], { 'text-color': ['coalesce', ['get', pre + 'c' + i], KMK] }); return r; };
   map.addSource('labels', { type: 'geojson', data: D('labels.geojson') });
+  state.rowsFile = D('labels.geojson');
   const numbersLayout = {
     'text-field': numberField,
     'text-font': [NARROW_BOLD],
@@ -1067,7 +1068,11 @@ async function init() {
     }
     // the rows come from a different file in each view — same layers, same
     // collision ladder, same density control
-    map.getSource('labels').setData(linesView ? D('lines-rows.geojson') : D('labels.geojson'));
+    // (only when the file changes: the first applyView() runs right after the
+    // source was added with labels.geojson, and a setData of the same URL
+    // aborted that fetch — one AJAXError in the console on every load)
+    const rowsFile = linesView ? D('lines-rows.geojson') : D('labels.geojson');
+    if (rowsFile !== state.rowsFile) { state.rowsFile = rowsFile; map.getSource('labels').setData(rowsFile); }
     paintChips(linesView);
     document.body.classList.toggle('lines-view', linesView);
     for (const b of document.querySelectorAll('#view-switch button'))
