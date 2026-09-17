@@ -22,7 +22,7 @@ this family's exception to the mode-colour rule, as a metro is). The rest of
 what Koleje Małopolskie run on rails — the Dunajec, the Hubal, the Luxtorpeda
 to Zakopane, the unnumbered KML to Jasło — is a Małopolska matter, not a Kraków
 one, and rides the sister sheet
-[krakow-mld-bus-map](https://miqell24.github.io/krakow-mld-bus-map/).
+[krakow-mld-bus-map](https://agcghub.github.io/krakow-mld-bus-map/).
 
 Koleje Małopolskie's own GTFS files every train under the brand "KML" and never
 names a line, so the SKA numbers come from the sanitised copy
@@ -36,10 +36,10 @@ lines. WST publishes no GTFS anywhere (odt.org.pl: "Brak umowy z
 dostawcą"); `pipeline/kp-wst-gtfs.py` builds one from the operator's own
 KiedyPrzyjedzie timetables (public web API, no shapes, no direction_id — stop
 sequences are the matching observations). The sister sheet
-[krakow-mld-bus-map](https://miqell24.github.io/krakow-mld-bus-map/) adds the
+[krakow-mld-bus-map](https://agcghub.github.io/krakow-mld-bus-map/) adds the
 same operator's Małopolskie Linie Dowozowe buses on all of Małopolska.
 
-**Live map:** https://miqell24.github.io/krakow-bus-map/
+**Live map:** https://agcghub.github.io/krakow-bus-map/
 
 ## Network diagram
 
